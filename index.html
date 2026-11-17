@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>谷仓次元屏模拟器</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./style.css">
+<main>
+  <header><h1>谷仓次元屏模拟器</h1><p id="status" role="status">等待载入固件</p></header>
+  <section class="device" aria-label="虚拟次元屏">
+    <canvas id="screen" width="360" height="360" aria-label="360 × 360 圆形触摸屏"></canvas>
+    <button id="side" aria-label="按住次元屏侧键" title="侧键"></button>
+  </section>
+  <div class="controls">
+    <button id="demo">运行 Chiikawa GO</button>
+    <label class="picker">选择整机 BIN<input id="file" type="file" accept=".bin"></label>
+    <button id="reset" disabled>重新启动</button>
+    <label class="mode">运行方式
+      <select id="mode"><option value="wasm">浏览器</option></select>
+    </label>
+  </div>
+  <details>
+    <summary>固件串口日志</summary>
+    <pre id="log"></pre>
+  </details>
+</main>
+<script type="module" src="./app.js"></script>
+</html>

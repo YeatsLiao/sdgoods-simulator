@@ -1,0 +1,19 @@
+:root { color-scheme: dark; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #131715; color: #f5f1e7; }
+body { margin: 0; }
+main { width: min(640px, calc(100% - 40px)); margin: 48px auto; }
+header { text-align: center; }
+h1 { font-size: clamp(22px, 5vw, 34px); margin: 0; }
+#status { color: #aad8ac; min-height: 1.5em; overflow-wrap: anywhere; }
+.device { width: fit-content; margin: 28px auto; position: relative; border-radius: 50%; background: #2e3731; padding: 14px; box-shadow: 0 12px 35px #0009, inset 0 1px 1px #ffffff40; }
+canvas { display: block; width: min(360px, calc(100vw - 80px)); height: auto; border-radius: 50%; background: #080a09; touch-action: none; }
+#side { position: absolute; right: -6px; top: 45%; width: 9px; height: 10%; padding: 0; border-radius: 0 5px 5px 0; background: #68766b; touch-action: none; }
+.controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+button, .picker, select { font: inherit; padding: 8px 12px; border: 1px solid #59675a; border-radius: 8px; background: #27332b; color: inherit; cursor: pointer; }
+.mode { display: flex; align-items: center; gap: 8px; }
+button:disabled { opacity: .5; cursor: default; }
+.picker { position: relative; }
+.picker input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.picker:focus-within { outline: 2px solid #aad8ac; }
+details { margin-top: 30px; border-top: 1px solid #425145; padding-top: 12px; }
+summary { cursor: pointer; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 250px; overflow: auto; font-size: 12px; }
