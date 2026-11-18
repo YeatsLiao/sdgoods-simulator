@@ -1,3 +1,3 @@
 @echo off
-python "%~dp0serve.py"
+python "%~dp0server\serve.py" %*
 if errorlevel 1 pause
