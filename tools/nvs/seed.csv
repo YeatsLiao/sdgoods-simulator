@@ -1,0 +1,15 @@
+key,type,encoding,value
+radio,namespace,,
+ssid,data,string,myssid
+pass,data,string,mypassword
+gw,data,string,
+bmb_net,namespace,,
+ssid,data,string,myssid
+pass,data,string,mypassword
+wifi,namespace,,
+ssid,data,string,myssid
+password,data,string,mypassword
+sdg_cc,namespace,,
+vol,data,u8,70
+bri,data,u8,60
+volunmute,data,u8,70
