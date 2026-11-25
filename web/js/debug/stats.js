@@ -15,6 +15,7 @@ const METRICS = [
   { key: "transport", label: "传输", aliases: ["transport"], format: (value) => TRANSPORTS[value] ?? String(value) },
   { key: "dropped", label: "丢帧", aliases: ["dropped", "droppedFrames"], format: integer },
   { key: "audioQueue", label: "音频队列", aliases: ["audioQueue", "queueMs", "bufferMs", "audio.queue"], format: (value) => `${integer(value)} ms`, optional: true },
+  { key: "audioArrival", label: "音频到达", aliases: ["audioArrival", "audioRatio", "audio.arrival"], format: percent, optional: true },
   { key: "audioUnderruns", label: "音频欠载", aliases: ["audioUnderruns", "underruns", "underrun", "audio.underruns"], format: integer, optional: true },
 ];
 
@@ -28,6 +29,11 @@ function fixed(value, digits) {
 function integer(value) {
   const number = Number(value);
   return Number.isFinite(number) ? String(Math.round(number)) : "—";
+}
+
+function percent(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${Math.round(number * 100)}%` : "—";
 }
 
 /** @param {Record<string, unknown>} source @param {string} path */
@@ -92,6 +98,7 @@ export class StatsPanel {
       const card = this.cards.get(metric.key);
       if (!card) continue;
       if (value === undefined) {
+        // Optional cards stay hidden instead of showing an unmeasured 0 / —.
         if (!metric.optional || !card.root.hidden) card.valueEl.textContent = "—";
         this.last.delete(metric.key);
         continue;

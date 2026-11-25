@@ -28,11 +28,18 @@ export class NativeRuntime {
     this.name = "firmware.bin";
     this.flashKey = "";
     this.statsTimer = 0;
+    /** @type {Record<string, unknown>|null} last stats payload pushed by the worker */
+    this.serverStats = null;
   }
 
   start(options) {
     this.stopping = false;
     this.booted = false;
+    this.serverStats = null;
+    // Zero means "no local sample yet", which keeps the worker's stats flowing
+    // until reportStats() takes over.
+    this.statsAt = 0;
+    this.statsFrames = 0;
     this.name = options.name ?? "firmware.bin";
     this.flashKey = options.flashKey ?? "";
     this.panel.reset();
@@ -166,9 +173,23 @@ export class NativeRuntime {
       this.emit(event.kind, { data: event.data });
       return;
     }
-    if (event.kind === "stats" && !this.booted) {
-      this.emit("stats", { stats: event.stats });
+    if (event.kind === "stats") {
+      this.serverStats = event.stats ?? null;
+      // Until the first local sample, the worker's own numbers are the only ones
+      // worth showing; afterwards reportStats() merges them in.
+      if (!this.statsAt) this.emit("stats", { stats: event.stats });
+      return;
     }
+  }
+
+  /**
+   * Co-simulated seconds per wall second, measured by the worker from SIM/CLOCK
+   * deltas. null means no clock delta yet (the panel renders "—", not a fake 0×).
+   * @returns {number|null}
+   */
+  realTime() {
+    const value = Number(this.serverStats?.realTime);
+    return Number.isFinite(value) && value >= 0 ? value : null;
   }
 
   reportStats() {
@@ -178,7 +199,13 @@ export class NativeRuntime {
     this.statsAt = now;
     this.statsFrames = this.frames;
     this.emit("stats", {
-      stats: { fps, frames: this.frames, transport: "ws", mips: null, realTime: null },
+      stats: {
+        fps,
+        frames: this.frames,
+        transport: "ws",
+        mips: null,
+        realTime: this.realTime(),
+      },
     });
   }
 

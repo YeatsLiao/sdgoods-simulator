@@ -302,9 +302,16 @@ class Session:
         if 2 + topic_length > len(frame):
             return
         topic = frame[2:2 + topic_length]
+        payload = frame[2 + topic_length:]
+        # After the topic, every consumer frame is an EmulatorMessage, so field 1
+        # is the co-simulated time. SIM/CLOCK is the only broadcast that must
+        # advance the clock even though none of its transactions are handled
+        # here; inside the envelope it carries a ClockSync (field 1 is
+        # events_fired_late, not a timestamp), which this code does not read.
         if topic == b"SIM/CLOCK":
+            self._update_clock(payload)
             return
-        message = fields(frame[2 + topic_length:])
+        message = fields(payload)
         self.clock = message.get(1, self.clock)
         if 5 in message:
             ack = fields(message[5])
@@ -339,6 +346,15 @@ class Session:
             if spi.get(4):
                 self.reply(request, 2, bytes(spi[4]))
             self._emit_frame(transfer)
+
+    def _update_clock(self, payload: bytes) -> None:
+        """Take the envelope's sim time; a malformed broadcast must not kill the bus."""
+        try:
+            clock = fields(payload).get(1)
+        except ValueError:
+            return
+        if clock is not None:
+            self.clock = clock
 
     def _emit_audio(self, pcm: bytes) -> None:
         fmt = self.out_format or SPEAKER_DEFAULT
@@ -473,6 +489,10 @@ class Session:
     def _stats_loop(self) -> None:
         last = time.monotonic()
         last_frames = 0
+        last_clock = self.clock
+        # A rate needs two samples; a session that starts with the clock already
+        # advanced still reports null until the next window compares deltas.
+        previous_rate = False
         while not self.stopping.wait(1.0):
             now = time.monotonic()
             with self._stats_lock:
@@ -480,10 +500,21 @@ class Session:
             elapsed = max(0.001, now - last)
             fps = (frames - last_frames) / elapsed
             last, last_frames = now, frames
+            # Co-simulated seconds per wall second: below 1 means the emulator
+            # cannot keep up and the speaker fills the gap with silence.
+            clock = self.clock
+            real_time = None
+            if previous_rate and clock > last_clock:
+                real_time = round(((clock - last_clock) / 1e9) / elapsed, 3)
+            # A firmware reset rewinds sim time to zero, so only an advancing
+            # clock is a usable baseline; otherwise this window has no rate.
+            previous_rate = clock > last_clock
+            last_clock = max(clock, last_clock)
             self.output.event("stats", stats={
                 "fps": round(fps, 2),
                 "frames": frames,
                 "transport": "ws",
+                "realTime": real_time,
             })
 
     def stop(self, snapshot: bool = True) -> bytes | None:

@@ -15,6 +15,7 @@ frame = [u16 LE topic_len][topic utf-8][EmulatorMessage]
 
 - `topic` 以 `@` 开头表示只发给该消费者；`SIM/CLOCK`、`SIM/RESET`、`SIM/EN`、`HW/GPIO/...` 为广播。
 - 发往 ESP-EMU 的帧是裸 `EmulatorMessage`，无 topic。
+- 主题之后一律是 `EmulatorMessage`，字段 1 是模拟时间 ns；`SIM/CLOCK` 的 `payload` 里是 `ClockSync`（字段 1 `events_fired_late`、2 `max_lateness_ns`、3 `broadcasts_dropped`、4 `scheduled_dropped`），`native_worker` 对 `SIM/CLOCK` 只取信封的模拟时间后立即返回，不解析其事务字段；其余广播（`SIM/RESET`、`SIM/EN`、`HW/GPIO/...`）本实现不处理。其它帧按 `EmulatorMessage` 解析并同样更新时钟（供 `key()`/`reply()` 打时间戳）。
 
 ### 1.2 Protobuf 线格式
 
@@ -202,12 +203,19 @@ event JSON：
 {"kind":"status","message":"已启动"}
 {"kind":"error","message":"…"}
 {"kind":"fault","report":"…"}
-{"kind":"stats","stats":{"fps":25.0,"frames":123,"transport":"ws"}}
+{"kind":"stats","stats":{"fps":25.0,"frames":123,"transport":"ws","realTime":0.62}}
 {"kind":"audioformat","format":{"receive":false,"rate":16000,"channels":2,"bits":16}}
 {"kind":"registers","data":{...}}
 {"kind":"memory","data":{"addr":...,"bytes":"base64"}}
 {"kind":"gpio","data":{...}}
 ```
+
+`stats.realTime`（协同仿真秒／墙钟秒，本机模式由 `server/native_worker.py` 上报）：
+
+- 取两次上报之间模拟时间的增量除以墙钟秒数。模拟时间是广播帧 `EmulatorMessage` 的字段 1，`SIM/CLOCK` 与其它帧都会更新它；小于 1 表示 ESP-EMU 跑不到实时，扬声器会补静音，表现为电台断续而非无声。
+- 没有可用增量时为 `null`（面板显示 `—`），包括：首个上报窗口、尚未收到任何时钟消息、模拟时间停滞、固件复位导致模拟时间归零或回退。复位后要先重新建立基准，因此归零后的第一个窗口仍是 `null`，不会出现负倍率或被放大的倍率。
+- `mips` 本机模式取不到，恒为 `null`。
+- 浏览器 WASM 模式不经该通道，倍率在 `web/js/device/wasm-runtime.js` 内由 CPU 周期数折算，与本字段口径不同，不要互相比较。
 
 ### 2.3 浏览器网络中继（`/relay`）
 

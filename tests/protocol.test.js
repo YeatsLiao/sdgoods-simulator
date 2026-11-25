@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   WIRE, bytesField, decodeAudio, decodeFrame, decodeLoad, encodeAudio, encodeFrame,
-  encodeLoad, fields, i2sIn, numberField, parseI2sFormat, parseI2sOut, register, reply,
+  encodeLoad, fields, i2sIn, numberField, parseI2sFormat, parseI2sOut, register, reply, unpackFrame,
 } from "../web/js/device/protocol.js";
 
 test("protobuf fields round trip", () => {
@@ -59,3 +59,28 @@ test("browser wire messages", () => {
   assert.deepEqual([...frame.transfer], [7, 8]);
   assert.equal(WIRE.FRAME, 1);
 });
+
+test("co-sim topic frames all carry an EmulatorMessage", () => {
+  // After the topic comes an EmulatorMessage whatever the topic is, so field 1
+  // is the co-simulated ns even for SIM/CLOCK (whose payload oneof holds the
+  // ClockSync counters, whose own field 1 is events_fired_late).
+  const [clockTopic, clockPayload] = unpackFrame(topicFrame("SIM/CLOCK", numberField(1, 1_600_000_000)));
+  assert.equal(clockTopic, "SIM/CLOCK");
+  assert.equal(fields(clockPayload)[1], 1_600_000_000);
+
+  const [busTopic, busPayload] = unpackFrame(topicFrame("@peer/SPI", numberField(1, 2_000_000_000)));
+  assert.equal(busTopic, "@peer/SPI");
+  assert.equal(fields(busPayload)[1], 2_000_000_000);
+});
+
+/** @param {string} topic @param {...number[]} payloadParts */
+function topicFrame(topic, ...payloadParts) {
+  const encoded = new TextEncoder().encode(topic);
+  const payload = payloadParts.flat();
+  const frame = new Uint8Array(2 + encoded.length + payload.length);
+  frame[0] = encoded.length & 0xff;
+  frame[1] = (encoded.length >> 8) & 0xff;
+  frame.set(encoded, 2);
+  frame.set(payload, 2 + encoded.length);
+  return frame;
+}
