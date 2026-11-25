@@ -1,8 +1,10 @@
 import {
+  applyMakeupGain,
+  createResampler,
   interleaveStereo,
   pcm16ToFloat32,
   pcm32ToFloat32,
-  resampleLinear,
+  trackArrival,
 } from "./codec.js";
 
 const DEFAULT_RATE = 16000;
@@ -29,6 +31,8 @@ function positive(value, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+const monotonicMs = () => globalThis.performance?.now?.() ?? Date.now();
+
 function joinStereo(left, right) {
   const frames = Math.min(left.length, right.length);
   const output = new Float32Array(frames * 2);
@@ -49,6 +53,18 @@ export class AudioEngine {
   #volume = 1;
   #muted = false;
   #levels = { outRms: 0, outQueued: 0, underruns: 0 };
+  #lastPlayError = null;
+  #makeup = { gain: 1, peak: 0 };
+  #makeupApplied = 1;
+  #arrival = { started: Number.NaN, seconds: 0, ratio: null };
+  #resamplerKey = "";
+  #resamplerNodes = null;
+  #capture = null;
+  #replay = null;
+  #replaySources = new Set();
+  #auto = { enabled: false, target: 4 };
+  #live = true;
+  #external = false;
 
   /** @returns {boolean} 是否已初始化 */
   get ready() {
@@ -60,9 +76,202 @@ export class AudioEngine {
     return this.#context?.sampleRate ?? 0;
   }
 
-  /** @returns {{outRms: number, outQueued: number, underruns: number}} */
+  /**
+   * @returns {{outRms: number, outQueued: number, underruns: number,
+   *   makeup: number, audioRatio: number|null,
+   *   capture: {active: boolean, seconds: number, target: number},
+   *   replay: {active: boolean, remaining: number, seconds: number}}}
+   */
   get levels() {
-    return { ...this.#levels };
+    const replay = this.replay;
+    const levels = {
+      ...this.#levels,
+      makeup: this.#makeupApplied,
+      audioRatio: this.#arrival.ratio,
+      external: this.#external,
+      capture: this.capture,
+      replay,
+      queueMs: this.sampleRate ? this.#levels.outQueued / this.sampleRate * 1000 : null,
+    };
+    if (replay.active) {
+      // The live ring is parked while a buffer plays, so its readings would say
+      // "silent" about audio the listener is actually hearing.
+      levels.outRms = this.#replay.rms;
+      levels.outQueued = Math.round(replay.remaining * this.sampleRate);
+    }
+    return levels;
+  }
+
+  /**
+   * 连续回放用的缓存状态。模拟器每墙钟秒只算出 0.2–0.35 秒音频，原速实时播放
+   * 必然断续；把同一段字节攒满目标时长再一次播完，才是原速且连续的声音。
+   * @returns {{active: boolean, seconds: number, target: number}}
+   */
+  get capture() {
+    if (!this.#capture) return { active: false, seconds: 0, target: 0 };
+    return {
+      active: true,
+      seconds: this.#capture.frames / this.#capture.rate,
+      target: this.#capture.target,
+    };
+  }
+
+  /**
+   * 正在连续播放的缓冲段。remaining 按 AudioContext 时钟计算，段尾归零。
+   * @returns {{active: boolean, remaining: number, seconds: number}}
+   */
+  get replay() {
+    const replay = this.#replay;
+    if (!replay || !this.#context) return { active: false, remaining: 0, seconds: 0 };
+    const remaining = replay.endsAt - this.#context.currentTime;
+    if (remaining <= 0) return { active: false, remaining: 0, seconds: replay.seconds };
+    return { active: true, remaining, seconds: replay.seconds };
+  }
+
+  /** @returns {{enabled: boolean, target: number}} 自动连续回放设置 */
+  get autoReplay() {
+    return { ...this.#auto };
+  }
+
+  /**
+   * 自动连续回放：设备每送出音频就缓存，攒满一段原速连播，播完接着缓存下一段。
+   * 关闭时丢弃旧缓存并停止所有已排队回放，立即回到实时环形缓冲。
+   * @param {{enabled?: boolean, target?: number}} [options]
+   * @returns {{enabled: boolean, target: number}}
+   */
+  setAutoReplay(options = {}) {
+    if (options.enabled !== undefined) this.#auto.enabled = Boolean(options.enabled);
+    const target = Number(options.target);
+    if (Number.isFinite(target) && target > 0) {
+      this.#auto.target = Math.min(30, Math.max(1, target));
+      // Retarget in place: audio already cached stays usable.
+      if (this.#capture) this.#capture.target = this.#auto.target;
+    }
+    if (!this.#auto.enabled) {
+      this.#capture = null;
+      this.#stopReplay();
+      this.#syncLive();
+    }
+    if (options.enabled !== undefined) {
+      this.#worklet?.port.postMessage({ type: "latency", mode: this.#auto.enabled ? "buffered" : "interactive" });
+    }
+    return this.autoReplay;
+  }
+
+  /** @returns {boolean} 是否由浏览器直连音源占用输出 */
+  get externalAudio() {
+    return this.#external;
+  }
+
+  /**
+   * 把输出交给浏览器直连音源：设备 PCM 只统计到达率，不再解码、重采样或入环，
+   * 环形缓冲同时停放。这样直连播放期间不会有两路声音，也省下无用的浏览器 CPU。
+   * @param {boolean} value
+   * @returns {boolean} 生效后的状态
+   */
+  setExternalAudio(value) {
+    const next = Boolean(value);
+    if (next === this.#external) return this.#external;
+    this.#external = next;
+    if (next) {
+      this.#capture = null;
+      this.#stopReplay();
+      this.#resetStream();
+    }
+    this.#syncLive();
+    return this.#external;
+  }
+
+  /**
+   * 开始缓存设备音频；缓存期间暂停实时输出，攒够目标时长后自动连续播放。
+   * @param {number} [seconds] 目标音频秒数，1–30
+   * @returns {Promise<boolean>} 是否已开始
+   */
+  async startCapture(seconds = this.#auto.target) {
+    if (!(await this.init())) return false;
+    const target = Math.min(30, Math.max(1, Number(seconds) || this.#auto.target));
+    this.#capture = { rate: this.#context.sampleRate, chunks: [], frames: 0, target };
+    this.#syncLive();
+    return true;
+  }
+
+  /**
+   * 结束缓存并连续播放已攒下的音频。上一段还没播完时接在其段尾，两段之间无缝。
+   * @returns {number} 实际播放的秒数，没有内容时为 0
+   */
+  playCapture() {
+    const capture = this.#capture;
+    this.#capture = null;
+    if (!capture || !capture.frames || !this.#context) {
+      this.#syncLive();
+      return 0;
+    }
+    const seconds = capture.frames / capture.rate;
+    const buffer = this.#context.createBuffer(2, capture.frames, capture.rate);
+    const left = buffer.getChannelData(0);
+    const right = buffer.getChannelData(1);
+    // A phrase starts and ends wherever the device happened to be, which clicks
+    // at full amplitude. The same few milliseconds of ramp the live ring uses.
+    const fade = Math.max(1, Math.min(Math.round(capture.rate * 0.005), Math.floor(capture.frames / 2)));
+    let at = 0;
+    let energy = 0;
+    for (const chunk of capture.chunks) {
+      for (let i = 0; i + 1 < chunk.length; i += 2) {
+        const edge = Math.min(at, capture.frames - 1 - at);
+        const gain = edge < fade ? edge / fade : 1;
+        left[at] = chunk[i] * gain;
+        right[at] = chunk[i + 1] * gain;
+        energy += left[at] * left[at] + right[at] * right[at];
+        at += 1;
+      }
+    }
+    const source = this.#context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.#gain);
+    const now = this.#context.currentTime;
+    const when = Math.max(now, this.#replay?.endsAt ?? now);
+    source.start(when);
+    this.#replaySources.add(source);
+    source.onended = () => {
+      source.disconnect();
+      this.#replaySources.delete(source);
+      if (this.#replay?.source === source) this.#replay = null;
+      this.#syncLive();
+    };
+    this.#replay = {
+      source,
+      endsAt: when + seconds,
+      seconds,
+      rms: Math.min(1, Math.sqrt(energy / Math.max(1, at * 2))),
+    };
+    this.#syncLive();
+    return seconds;
+  }
+
+  /** 丢弃缓存（设备重启或换固件时调用）。 */
+  clearCapture() {
+    this.#capture = null;
+    this.#syncLive();
+  }
+
+  /**
+   * 实时环形缓冲只在没有缓存、也没有连续回放时才接音频：否则同一段字节会被
+   * 播两遍，而空闲的环还会把设计中的静音记成欠载。
+   */
+  #syncLive() {
+    const live = !this.#external && !this.#capture && !this.replay.active;
+    if (live === this.#live) return;
+    this.#live = live;
+    this.#worklet?.port.postMessage({ type: "live", on: live });
+  }
+
+  #stopReplay() {
+    this.#replay = null;
+    for (const source of this.#replaySources) {
+      source.onended = null;
+      try { source.stop(); source.disconnect(); } catch { /* Already ended. */ }
+    }
+    this.#replaySources.clear();
   }
 
   /**
@@ -87,7 +296,7 @@ export class AudioEngine {
     if (!Context) throw new Error("当前浏览器不支持 Web Audio，无法播放设备音频");
     let context = null;
     try {
-      context = new Context();
+      context = new Context({ latencyHint: "interactive" });
       if (!context.audioWorklet) {
         throw new Error("当前环境不支持 AudioWorklet（需要 https 或 localhost）");
       }
@@ -107,6 +316,8 @@ export class AudioEngine {
           outRms: data.rms ?? 0,
           outQueued: data.queued ?? 0,
           underruns: data.underruns ?? 0,
+          prerollMs: data.prerollMs ?? null,
+          dropped: data.dropped ?? 0,
         };
       };
       if (context.state === "suspended") await context.resume().catch(() => {});
@@ -118,6 +329,10 @@ export class AudioEngine {
       this.#context = context;
       this.#worklet = worklet;
       this.#gain = gain;
+      worklet.port.postMessage({ type: "latency", mode: this.#auto.enabled ? "buffered" : "interactive" });
+      // 新建的环形缓冲默认是实时的，这里按当前归属重新停放一次。
+      this.#live = true;
+      this.#syncLive();
       return true;
     } catch (error) {
       await context?.close().catch(() => {});
@@ -138,6 +353,16 @@ export class AudioEngine {
     try {
       const bytes = toBytes(pcm);
       if (bytes.byteLength === 0) return true;
+      if (this.#external) {
+        // 直连取流期间设备 PCM 只计入到达率：不解码、不重采样、不入环，
+        // 也不唤醒 AudioContext，省下的都是白花的浏览器 CPU。
+        const rate = positive(Number(format?.rate), DEFAULT_RATE);
+        const channels = Math.floor(positive(Number(format?.channels), DEFAULT_CHANNELS));
+        const bits = positive(Number(format?.bits), DEFAULT_BITS);
+        const frames = Math.floor(bytes.byteLength / (channels * Math.max(1, bits / 8)));
+        trackArrival(this.#arrival, frames / rate, monotonicMs());
+        return true;
+      }
       if (this.#context.state === "suspended") this.#context.resume().catch(() => {});
       const rate = positive(Number(format?.rate), DEFAULT_RATE);
       const channels = Math.floor(positive(Number(format?.channels), DEFAULT_CHANNELS));
@@ -145,29 +370,110 @@ export class AudioEngine {
       const contextRate = this.#context.sampleRate;
       let samples = bits === 32 ? pcm32ToFloat32(bytes) : pcm16ToFloat32(bytes);
       if (samples.length === 0) return true;
+      const seconds = Math.floor(samples.length / Math.max(1, channels)) / rate;
+      const nodes = this.#streamResamplers(rate, channels, contextRate);
       if (channels <= 1) {
-        samples = interleaveStereo(resampleLinear(samples, rate, contextRate), 1);
+        samples = interleaveStereo(nodes[0](samples), 1);
       } else {
+        // Only the first two channels reach the speaker; a wider container is
+        // de-interleaved so every channel keeps its own resampler phase.
         const frames = Math.floor(samples.length / channels);
-        let left = new Float32Array(frames);
-        let right = new Float32Array(frames);
+        const monoLeft = new Float32Array(frames);
+        const monoRight = new Float32Array(frames);
         for (let i = 0; i < frames; i++) {
-          left[i] = samples[i * channels];
-          right[i] = samples[i * channels + 1];
+          monoLeft[i] = samples[i * channels];
+          monoRight[i] = samples[i * channels + 1];
         }
-        left = resampleLinear(left, rate, contextRate);
-        right = resampleLinear(right, rate, contextRate);
-        samples = joinStereo(left, right);
+        samples = joinStereo(nodes[0](monoLeft), nodes[1](monoRight));
       }
+      // The returned gain is what this chunk actually got: the stored gain is
+      // smoothed and may still sit above the headroom ceiling.
+      this.#makeupApplied = applyMakeupGain(samples, this.#makeup);
+      trackArrival(this.#arrival, seconds, monotonicMs());
+      if (!this.#capture && this.#auto.enabled) {
+        this.#capture = {
+          rate: contextRate,
+          chunks: [],
+          frames: 0,
+          target: this.#auto.target,
+        };
+        this.#syncLive();
+      }
+      if (this.#capture) {
+        // Captured chunks stay out of the live ring: playing them twice, once
+        // chopped and once whole, would only add the chop back.
+        this.#capture.chunks.push(samples);
+        this.#capture.frames += samples.length / 2;
+        if (this.#capture.frames / this.#capture.rate >= this.#capture.target) {
+          this.playCapture();
+          if (this.#auto.enabled) {
+            // Keep the pipeline full while the previous phrase is still playing.
+            this.#capture = {
+              rate: contextRate,
+              chunks: [],
+              frames: 0,
+              target: this.#auto.target,
+            };
+            this.#syncLive();
+          }
+        }
+        return true;
+      }
+      // onended normally unparks the ring, but a suspended context can swallow
+      // it; live audio arriving is itself proof the ring may run again.
+      this.#syncLive();
       this.#worklet.port.postMessage({ samples, channels: 2 }, [samples.buffer]);
       return true;
-    } catch {
+    } catch (error) {
+      this.#reportPlayError(error);
       return false;
     }
   }
 
+  /**
+   * One streaming resampler per channel, kept while the format is stable so
+   * chunk seams interpolate instead of restarting the phase.
+   * @param {number} rate source rate of this chunk
+   * @param {number} channels
+   * @param {number} contextRate AudioContext rate
+   */
+  #streamResamplers(rate, channels, contextRate) {
+    const used = channels <= 1 ? 1 : 2;
+    const key = `${rate}/${used}/${contextRate}`;
+    if (this.#resamplerKey !== key) {
+      this.#resamplerKey = key;
+      this.#resamplerNodes = Array.from(
+        { length: used },
+        () => createResampler(rate, contextRate),
+      );
+    }
+    return this.#resamplerNodes;
+  }
+
+  // play() runs ~60 times a second: report each distinct message once per
+  // stream, so flush()/close() let a fault that returns after a restart show up.
+  #reportPlayError(error) {
+    const message = error?.message ?? String(error);
+    if (message === this.#lastPlayError) return;
+    this.#lastPlayError = message;
+    console.error("[audio] play failed:", message);
+  }
+
+  #resetStream() {
+    this.#resamplerKey = "";
+    this.#resamplerNodes = null;
+    this.#makeup = { gain: 1, peak: 0 };
+    this.#makeupApplied = 1;
+    this.#arrival = { started: Number.NaN, seconds: 0, ratio: null };
+    this.#lastPlayError = null;
+  }
+
   /** 丢弃已排队的音频（设备重启后调用）。 */
   flush() {
+    this.#resetStream();
+    this.#capture = null;
+    this.#stopReplay();
+    this.#syncLive();
     this.#worklet?.port.postMessage({ type: "flush" });
   }
 
@@ -232,6 +538,9 @@ export class AudioEngine {
   async close() {
     const context = this.#context;
     this.#generation++;
+    this.#capture = null;
+    this.#stopReplay();
+    this.#live = true;
     if (this.#worklet) {
       this.#worklet.port.onmessage = null;
       this.#worklet.port.close();
@@ -245,6 +554,7 @@ export class AudioEngine {
     this.#recording = null;
     this.#initPromise = null;
     this.#levels = { outRms: 0, outQueued: 0, underruns: 0 };
+    this.#resetStream();
     if (context && context.state !== "closed") await context.close().catch(() => {});
   }
 }
