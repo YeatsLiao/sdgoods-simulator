@@ -1,5 +1,6 @@
 import { describeFirmware, parsePartitionTable } from "../device/firmware.js";
 import { assembleSingleApp } from "./image.js";
+import { findNetworkPartition } from "./network-seed.js";
 
 const PLATFORM_ROOT = new URL("../../platform/", import.meta.url);
 const ASSETS_ROOT = new URL("../../assets/", import.meta.url);
@@ -80,7 +81,7 @@ function isBlank(region) {
  * common SDGOODS namespaces connects to the host network without provisioning.
  */
 function seedNetwork(bytes, partitions, seed) {
-  const nvs = partitions.find((entry) => entry.type === 1 && entry.subtype === 2);
+  const nvs = findNetworkPartition(partitions);
   if (!nvs) return;
   if (nvs.size < seed.byteLength) throw new Error("平台 NVS 分区小于网络预置镜像");
   const region = bytes.subarray(nvs.offset, nvs.offset + nvs.size);
@@ -99,7 +100,7 @@ export async function toBootImage(firmware, { fetchImpl = globalThis.fetch } = {
   const info = describeFirmware(bytes);
   if (info.partitions.length > 0) {
     const copy = new Uint8Array(bytes);
-    const nvs = info.partitions.find((entry) => entry.type === 1 && entry.subtype === 2);
+    const nvs = findNetworkPartition(info.partitions);
     if (nvs && isBlank(copy.subarray(nvs.offset, nvs.offset + nvs.size))) {
       try {
         const seed = await fetchAsset(fetchImpl, ASSETS_ROOT, "nvs-seed.bin");

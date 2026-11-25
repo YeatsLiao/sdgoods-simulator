@@ -98,6 +98,33 @@ test("toBootImage seeds a blank NVS in a full image", async () => {
   assert.deepEqual([...bytes.subarray(0x9000, 0x9000 + SEED.byteLength)], [...SEED]);
 });
 
+test("Xiaozhi layouts seed nvs and preserve the preceding nvsfactory partition", async () => {
+  const full = new Uint8Array(0x10000).fill(0xff);
+  const table = partitionFile();
+  table.fill(0, 12, 28);
+  table.set(new TextEncoder().encode("nvsfactory"), 12);
+  const view = new DataView(table.buffer);
+  view.setUint32(8, 0x1000, true);
+  view.setUint16(0x40, 0x50aa, true);
+  table[0x42] = 1;
+  table[0x43] = 2;
+  view.setUint32(0x44, 0xa000, true);
+  view.setUint32(0x48, 0x6000, true);
+  table.fill(0, 0x4c, 0x5c);
+  table.set(new TextEncoder().encode("nvs"), 0x4c);
+  view.setUint16(0x60, 0xffff, true);
+  full.set(table, 0x8000);
+  const result = new Uint8Array((await toBootImage(full, { fetchImpl: platformFetch() })).firmware);
+  assert.ok(result.subarray(0x9000, 0xa000).every((byte) => byte === 0xff));
+  assert.deepEqual(result.subarray(0xa000, 0x10000), SEED);
+  assert.ok(full.subarray(0xa000).every((byte) => byte === 0xff), "source firmware must stay unchanged");
+  // A populated Wi-Fi partition must also be kept, even if factory is blank.
+  full[0xa000] = 0xfe;
+  const preserved = new Uint8Array((await toBootImage(full, { fetchImpl: platformFetch() })).firmware);
+  assert.equal(preserved[0xa000], 0xfe);
+  assert.ok(preserved.subarray(0x9000, 0xa000).every((byte) => byte === 0xff));
+});
+
 test("toBootImage wraps an app package with the platform bootloader and table", async () => {
   const app = appImage();
   const result = await toBootImage(app, { fetchImpl: platformFetch() });

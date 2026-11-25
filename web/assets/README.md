@@ -7,7 +7,7 @@
 - `wifi`：`ssid=myssid`、`password=mypassword`
 - `sdg_cc`：`vol=70`、`bri=60`、`volunmute=70`（平台控制中心默认音量/亮度）
 
-空白 NVS 的纯 app 包和整机镜像都会写入这份预置；已有 NVS 数据不覆盖。
+纯 app 包和整机镜像只向名称为 `nvs`、类型为 data/nvs 的空白分区写入这份预置；已有 NVS 数据不覆盖。小智/傻妞镜像中的 `nvsfactory` 是另一份分区，不可按 NVS subtype 的首次出现顺序选取。
 
 重新生成（只需在凭据或命名空间变化时执行）：
 

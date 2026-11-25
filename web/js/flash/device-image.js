@@ -2,6 +2,7 @@ import { parsePartitionTable } from "../device/firmware.js";
 import { isAppPackage } from "./app-package.js";
 import { assembleParts } from "./image.js";
 import { OTA_SECTOR_SIZE, buildOtadata } from "./otadata.js";
+import { findNetworkPartition } from "./network-seed.js";
 
 const PARTITION_OFFSET = 0x8000;
 const APP_MIN_OFFSET = 0x10000;
@@ -36,7 +37,7 @@ export function parseSlotLayout(partitionTable) {
   const bytes = toBytes(partitionTable, "partitionTable");
   const partitions = parsePartitionTable(bytes, 0);
   if (!partitions.length) throw new Error("平台分区表为空或格式无效");
-  const nvs = partitions.find((entry) => entry.type === DATA_TYPE && entry.subtype === SUBTYPE_NVS) ?? null;
+  const nvs = findNetworkPartition(partitions);
   const otadata = partitions.find((entry) => entry.type === DATA_TYPE && entry.subtype === SUBTYPE_OTA) ?? null;
   const slots = partitions
     .filter((entry) => entry.type === APP_TYPE
