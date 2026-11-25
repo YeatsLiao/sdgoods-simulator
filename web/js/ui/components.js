@@ -6,6 +6,10 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** Inline stroke icons; paths are static project data, never user input. */
 const ICONS = {
+  dockBottom: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18"/>',
+  dockRight: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/>',
+  settings: '<path d="m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3h6l1-3 3-1-1-3 2-2-2-2 1-3-3-1-1-3z"/><circle cx="12" cy="12" r="3"/>',
+
   play: '<path d="M8 5.5v13l10-6.5z"/>',
   restart: '<path d="M20 11a8 8 0 1 0-.7 4.5"/><path d="M20 4v7h-7"/>',
   trash: '<path d="M4 7h16"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/><path d="M6.5 7l.8 11.2A1.8 1.8 0 0 0 9.1 20h5.8a1.8 1.8 0 0 0 1.8-1.8L17.5 7"/><path d="M10 11v5M14 11v5"/>',
@@ -30,6 +34,7 @@ const ICONS = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/>',
   copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M5.5 15V6a2 2 0 0 1 2-2h9"/>',
+  play: '<path d="m8 4 12 8-12 8z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   layers: '<path d="M12 4l8 4.5-8 4.5-8-4.5z"/><path d="M4 12.5l8 4.5 8-4.5"/><path d="M4 16.5l8 4.5 8-4.5"/>',
 };
@@ -206,7 +211,7 @@ export function tabs(items, { onChange, ariaLabel = "面板" } = {}) {
   }
 
   element.addEventListener("keydown", (event) => {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
     const visible = [...buttons.values()].filter((node) => !node.hidden);
     if (!visible.length) return;
     event.preventDefault();
@@ -214,7 +219,7 @@ export function tabs(items, { onChange, ariaLabel = "面板" } = {}) {
     let index;
     if (event.key === "Home") index = 0;
     else if (event.key === "End") index = visible.length - 1;
-    else index = (current + (event.key === "ArrowRight" ? 1 : -1) + visible.length) % visible.length;
+    else index = (current + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + visible.length) % visible.length;
     select(visible[index].dataset.tab, { focus: true });
   });
 

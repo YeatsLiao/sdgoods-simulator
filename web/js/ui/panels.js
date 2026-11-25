@@ -1,33 +1,21 @@
+import { createDock } from "./dock.js";
+import { createWorkspace, confirmClearData } from "./workspace.js";
+import { createLibraryPanel } from "./library-panel.js";
+import { createAudioPanel } from "./audio-panel.js";
+import { createSlotsPanel } from "./slots-panel.js";
 import { el } from "../shared/dom.js";
 import { formatBytes } from "../shared/format.js";
-import { button, chip, icon, meter, setButtonLabel, tabs, toastHost } from "./components.js";
+import { button, icon, tabs, toastHost } from "./components.js";
 
 const TAB_DEFS = [
-  { id: "library", label: "固件库", icon: "chip" },
-  { id: "console", label: "串口", icon: "terminal", devOnly: true },
+  { id: "library", label: "最近使用", icon: "file" },
+  { id: "console", label: "日志", icon: "terminal", devOnly: true },
   { id: "performance", label: "性能", icon: "gauge", devOnly: true },
-  { id: "audio", label: "音频", icon: "volume" },
-  { id: "debug", label: "调试", icon: "wrench", devOnly: true },
-  { id: "about", label: "关于", icon: "info" },
+  { id: "debug", label: "设备", icon: "wrench", devOnly: true },
+  { id: "sound", label: "声音", icon: "volume", devOnly: true },
+  { id: "settings", label: "设置", icon: "settings", devOnly: true },
+  { id: "about", label: "关于", icon: "info", devOnly: true },
 ];
-
-const KIND_LABELS = { sample: "示例", file: "本地文件", url: "链接", market: "市场" };
-
-function relativeTime(time) {
-  if (!Number.isFinite(time) || time <= 0) return "";
-  const delta = Date.now() - time;
-  if (delta < 60_000) return "刚刚使用";
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前`;
-  if (delta < 7 * 86_400_000) return `${Math.floor(delta / 86_400_000)} 天前`;
-  return new Date(time).toLocaleDateString("zh-CN");
-}
-
-function sourceText(entry) {
-  if (entry.kind === "sample") return "内置示例 · /demo.bin";
-  if (entry.kind === "market") return "官方市场占位，暂不可运行";
-  return entry.source || "来源未知";
-}
 
 function applyIcon(node, name) {
   if (!node || node.querySelector("svg.icon")) return;
@@ -62,9 +50,8 @@ export function createUI(root) {
     firmwareMeta: need("firmware-meta"),
     firmwareName: need("firmware-name"),
     firmwareVersion: need("firmware-version"),
-    mode: need("mode"),
+    mode: el("select", { id: "mode", "aria-label": "运行方式" }, el("option", { value: "wasm" }, "浏览器"), el("option", { value: "native", disabled: "" }, "本机加速")),
     dev: need("dev"),
-    share: need("share"),
     tabsHost: need("tabs"),
     panelHost: need("panel-host"),
     launcher: need("launcher"),
@@ -72,22 +59,17 @@ export function createUI(root) {
     launcherList: need("launcher-list"),
     launcherHint: need("launcher-hint"),
     launcherClose: need("launcher-close"),
-    run: need("run"),
     restart: need("restart"),
-    reset: need("reset"),
-    mute: need("mute"),
-    volume: need("volume"),
+    reset: need("clear-open"),
+    mute: button("", { id: "mute", iconOnly: true, ariaLabel: "静音" }),
+    volume: el("input", { id: "volume", type: "range", min: "0", max: "100", value: "80", "aria-label": "音量" }),
     screenshot: need("screenshot"),
     record: need("record"),
     fullscreen: need("fullscreen"),
     fileInput: need("file"),
-    runCta: need("run-cta"),
-    runCtaButton: need("run-cta-button"),
     touchOverlay: need("touch-overlay"),
     touchDot: need("touch-dot"),
     touchReadout: need("touch-readout"),
-    onboarding: need("onboarding"),
-    onboardingNative: need("onboarding-native"),
     errorCard: need("error-card"),
     errorMessage: need("error-message"),
     errorActions: need("error-actions"),
@@ -95,19 +77,27 @@ export function createUI(root) {
 
   for (const [node, name] of [
     [refs.launcher, "layers"],
-    [refs.run, "play"],
     [refs.restart, "restart"],
     [refs.reset, "trash"],
     [refs.screenshot, "camera"],
     [refs.record, "record"],
     [refs.fullscreen, "expand"],
-    [refs.share, "link"],
     [refs.launcherClose, "close"],
-    [need("onboarding-close"), "close"],
     [need("error-close"), "close"],
   ]) {
     applyIcon(node, name);
   }
+
+  applyIcon(need("try-sample"), "play");
+  applyIcon(refs.dev, "terminal");
+
+  const dockController = createDock(app);
+  for (const [id, name] of [["dock-bottom", "dockBottom"], ["dock-right", "dockRight"], ["dock-max", "expand"], ["sound-open", "settings"]]) applyIcon(find(id), name);
+
+  const workspace = createWorkspace(app, {
+    onFile: (file) => dispatchLibrary("file", { file }),
+    onError: (message) => toast(message, "warning"),
+  });
 
   const nativeOption = refs.mode.querySelector('option[value="native"]');
   const activePanelIds = new Set();
@@ -115,9 +105,7 @@ export function createUI(root) {
   let devMode = false;
   let activePanel = "library";
   let hasRun = false;
-  let busyFlag = false;
-  let onboardingOpen = false;
-  let onboardingReturnFocus = null;
+  let screenReady = false;
   let touchHideTimer = 0;
 
   const tabController = tabs(
@@ -126,6 +114,9 @@ export function createUI(root) {
   );
   refs.tabsHost.replaceChildren(tabController.element);
   const tabsElement = tabController.element;
+  const orientTabs = () => tabsElement.setAttribute("aria-orientation", "horizontal");
+  orientTabs();
+  window.addEventListener("resize", orientTabs);
 
   const toastContainer = toastHost();
   document.body.append(toastContainer);
@@ -142,20 +133,14 @@ export function createUI(root) {
     );
   }
 
-  function dispatchOnboarding(action) {
-    refs.onboarding.dispatchEvent(
-      new CustomEvent("sdg:onboarding", { bubbles: true, detail: { action } }),
-    );
-  }
-
   function mountPanel(id, className, ...children) {
     const section = el(
       "section",
       {
         id: `panel-${id}`,
         class: ["panel", className].filter(Boolean).join(" "),
-        role: "tabpanel",
-        "aria-labelledby": `tab-${id}`,
+        role: TAB_DEFS.find((item) => item.id === id)?.devOnly ? "tabpanel" : "region",
+        "aria-label": TAB_DEFS.find((item) => item.id === id)?.label ?? id,
         hidden: id !== "library",
       },
       ...children,
@@ -165,344 +150,83 @@ export function createUI(root) {
     return section;
   }
 
-  // Library panel -----------------------------------------------------------
-  const sampleButton = button("运行示例", { id: "library-sample", kind: "primary", iconName: "play" });
-  const addFileButton = button("选择本地文件", { id: "library-file", iconName: "upload" });
-  const urlInput = el("input", {
-    id: "url",
-    class: "text-input",
-    type: "url",
-    inputmode: "url",
-    autocomplete: "off",
-    spellcheck: "false",
-    placeholder: "https://example.com/firmware.bin",
-    "aria-label": "固件链接",
-  });
-  const urlSha = el("input", {
-    id: "url-sha",
-    class: "text-input",
-    type: "text",
-    autocomplete: "off",
-    spellcheck: "false",
-    placeholder: "粘贴 64 位十六进制 SHA-256",
-    "aria-label": "固件 SHA-256 校验值（可选）",
-  });
-  const addUrlButton = button("添加链接", { id: "url-add", iconName: "plus", type: "submit" });
-  const urlForm = el(
-    "form",
-    { class: "url-form", novalidate: "" },
-    el("div", { class: "url-row" }, urlInput, addUrlButton),
-    el(
-      "details",
-      { class: "url-advanced" },
-      el("summary", {}, "粘贴 SHA-256 校验（可选）"),
-      el("div", { class: "url-sha-row" }, urlSha),
-    ),
-    el("p", { class: "field-hint" }, "支持 http(s) 链接；目标服务器需允许跨域（CORS）。"),
-  );
+  const { libraryApi, libraryPanel, libraryList, sampleButton, addFileButton, urlInput, urlSha, addUrlButton, urlForm } =
+    createLibraryPanel({ mountPanel, dispatchLibrary, openFile: () => refs.fileInput.click(), toast });
 
-  const libraryBusy = el(
-    "div",
-    { id: "library-busy", class: "library-busy", hidden: "" },
-    el("span", { class: "spinner", "aria-hidden": "true" }),
-    el("span", {}, "正在读取并校验固件…"),
-  );
+  const { slotsApi, launcherApi, slotList, launcherOpenButton, launcherList } =
+    createSlotsPanel({ mountPanel, dispatchSlots, refs });
 
-  const marketCard = el(
-    "div",
-    {
-      class: "market-card",
-      "aria-disabled": "true",
-      title: "官方市场接入将在后续版本提供",
-    },
-    el("span", { class: "market-icon" }, icon("lock", { size: 18 })),
-    el(
-      "div",
-      { class: "market-copy" },
-      el("strong", {}, "官方市场"),
-      el("span", {}, "接入官方固件市场将在后续版本提供。本轮支持示例、本地文件与链接。"),
-    ),
-    chip("即将上线"),
-  );
+  const { micButton, micMeter, setAudioLevels, setMicActive } = createAudioPanel();
+  micButton.remove();
+  const resetLayout = button("重置面板布局", { id: "reset-layout" });
+  resetLayout.addEventListener("click", () => { dockController.reset(); toast("面板布局已重置", "info"); });
+  const currentName = el("p", { id: "settings-firmware-name", class: "settings-filename" }, "尚未打开固件");
+  const networkHelp = el("p", { id: "setup-advice", hidden: true, class: "field-hint" }, "模拟器不创建真实热点。空白配置自动连接虚拟 Wi-Fi；仍停留配网时可重新打开 BIN，或确认后清除当前固件数据。云端激活按固件提示完成。");
+  const dataGroup = el("section", { class: "settings-group" }, el("h3", {}, "当前固件"), currentName, refs.reset, need("setup-open"), networkHelp);
+  const help = el("section", { class: "about-content" }, el("h2", { class: "panel-title" }, "关于次元屏模拟器"),
+    el("p", {}, "打开 BIN 或拖入文件开始。触摸圆屏操作；右上侧键可短按或长按，也可按住空格。"),
+    el("p", {}, "重启保留设置和进度；清除运行数据会恢复这份固件的初始状态。"),
+    el("p", {}, "本机加速通常更流畅，Windows 需要 Ubuntu WSL；浏览器方式无需 WSL，但复杂固件可能更慢。切换方式会重新启动当前固件。"),
+    el("p", {}, "开发工具可停靠下方或右侧，拖动分隔线调整尺寸，也可用方向键调整。"),
+    el("p", {}, "ESP-EMU 1.1.0 · ESP32-S3。暂不模拟 BLE、NFC 和电池；发布固件前请用实物复测。"),
+    el("a", { href: "https://github.com/yeatsliao", target: "_blank", rel: "noreferrer noopener" }, "作者 · yeatsliao"),
+    el("a", { href: "https://sdgoods.ai/home.html", target: "_blank", rel: "noreferrer noopener" }, "谷仓官方 · SDGOODS"));
+  mountPanel("sound", "panel-sound",
+    el("section", { class: "settings-group" }, el("h3", {}, "声音"),
+      el("div", { class: "volume-heading" }, el("span", {}, "音量"), el("output", { id: "volume-value", for: "volume" }, "80%")),
+      el("div", { class: "speaker-volume" }, refs.mute, refs.volume),
+      el("div", { class: "microphone-control" }, micButton), micMeter));
+  mountPanel("settings", "panel-settings", dataGroup,
+    el("section", { class: "settings-group" }, el("h3", {}, "工作台布局"), resetLayout));
+  mountPanel("about", "panel-about", help);
 
-  const libraryList = el(
-    "div",
-    { id: "library-list", class: "library-list" },
-    el("p", { class: "library-empty" }, "固件会显示在这里。可以先运行示例或添加本地文件。"),
-  );
 
-  const libraryPanel = mountPanel(
-    "library",
-    "panel-library",
-    el(
-      "div",
-      { class: "panel-head" },
-      el("p", { class: "eyebrow" }, "本机固件"),
-      el("h2", { class: "panel-title" }, "固件库"),
-      el(
-        "p",
-        { class: "panel-subtitle" },
-        "运行内置示例、本地 BIN 或链接。固件只在本机加载并缓存，不会上传到服务器。",
-      ),
-    ),
-    el("div", { class: "source-actions" }, sampleButton, addFileButton),
-    urlForm,
-    libraryBusy,
-    marketCard,
-    libraryList,
-  );
-
-  // OTA slot panel ----------------------------------------------------------
-  const launcherOpenButton = button("打开启动器", { id: "launcher-open", iconName: "layers" });
-  const slotsStatus = el("p", { id: "slots-status", class: "slots-status" }, "正在读取平台分区表…");
-  const slotList = el("div", { id: "slot-list", class: "slot-list" });
-
-  mountPanel(
-    "slots",
-    "panel-slots",
-    el(
-      "div",
-      { class: "panel-head" },
-      el("p", { class: "eyebrow" }, "多应用槽"),
-      el("h2", { class: "panel-title" }, "应用槽"),
-      el(
-        "p",
-        { class: "panel-subtitle" },
-        "模拟官方平台的 4 个 OTA 槽（ota_0..ota_3）：把固件库里的纯 app 包装入任意空槽，再从槽启动。槽分配保存在本机，刷新页面后仍保留。",
-      ),
-    ),
-    el("div", { class: "slots-actions" }, launcherOpenButton, chip("官方 launcher UI 未运行", { className: "slot-mode-chip" })),
-    slotsStatus,
-    slotList,
-    el(
-      "p",
-      { class: "panel-note" },
-      "启动槽会按官方分区表拼出完整 Flash（官方 bootloader + 分区表 + otadata + 空 NVS 预置），由 bootloader 从对应槽启动。这里只模拟槽机制与启动流程，官方启动器界面仍由真机或后续平台镜像提供；整机镜像不能装入槽。",
-    ),
-  );
-
-  function slotCard(slot, model) {
-    const index = slot.slotIndex;
-    const app = slot.app;
-    const running = model.runningSlot === index;
-    const selected = model.selected === index;
-    const tags = [];
-    if (running) tags.push(chip("运行中", { kind: "success" }));
-    else if (selected) tags.push(chip("上次启动"));
-
-    const picker = el("select", {
-      class: "slot-select",
-      "aria-label": `选择要装入 OTA${index} 的固件`,
-    });
-    picker.append(el("option", { value: "" }, "从固件库选择纯 app 包…"));
-    for (const entry of model.entries ?? []) {
-      if (entry.kind === "market") continue;
-      const version = entry.version ? ` · v${entry.version}` : "";
-      picker.append(el("option", { value: entry.id }, `${entry.name}${version}`));
-    }
-
-    const assign = button("装入", {
-      iconName: "upload",
-      className: "slot-assign",
-      disabled: model.busy || !(model.entries ?? []).some((entry) => entry.kind !== "market"),
-    });
-    assign.addEventListener("click", () => {
-      if (!picker.value) {
-        toast("请先选择一个固件条目", "warning");
-        picker.focus();
-        return;
-      }
-      dispatchSlots("assign", { slotIndex: index, entryId: picker.value });
-    });
-
-    const launch = button("启动", {
-      kind: "primary",
-      iconName: "play",
-      className: "slot-launch",
-      disabled: !app || model.busy,
-    });
-    launch.addEventListener("click", () => dispatchSlots("launch", { slotIndex: index }));
-
-    const clear = button("清空", {
-      iconName: "trash",
-      className: "slot-clear",
-      disabled: !app || model.busy,
-    });
-    clear.addEventListener("click", () => dispatchSlots("clear", { slotIndex: index }));
-
-    const meta = [];
-    if (app) {
-      if (app.version) meta.push(`v${app.version}`);
-      if (app.project) meta.push(app.project);
-      if (app.size) meta.push(formatBytes(app.size));
-    } else {
-      meta.push("空槽");
-    }
-    if (slot.offset !== null && slot.offset !== undefined) {
-      meta.push(`0x${slot.offset.toString(16).toUpperCase()}`);
-    }
-    if (slot.size) meta.push(formatBytes(slot.size));
-
-    return el(
-      "article",
-      {
-        class: ["slot-card", app ? "is-filled" : "is-empty", running ? "is-running" : ""]
-          .filter(Boolean)
-          .join(" "),
-        dataset: { slot: String(index) },
-      },
-      el(
-        "div",
-        { class: "slot-card-head" },
-        el(
-          "div",
-          { class: "slot-title-row" },
-          el("span", { class: "slot-index" }, `OTA${index}`),
-          el("h3", { class: "slot-name", title: app?.name ?? "空槽" }, app?.name ?? "空槽"),
-          ...tags,
-        ),
-        el("p", { class: "slot-meta" }, meta.join(" · ")),
-      ),
-      el("div", { class: "slot-picker" }, picker, assign),
-      el("div", { class: "slot-actions" }, launch, clear),
-    );
+  const sidebarLibrary = find("sidebar-library");
+  function placeLibrary() {
+    if (!sidebarLibrary) return;
+    const target = window.matchMedia?.("(max-width: 800px)").matches ? libraryPanel : sidebarLibrary;
+    target.append(libraryList, find("library-busy"));
   }
-
-  const slotsApi = {
-    /** @param {{slots: Array<object>, selected: number|null, runningSlot: number|null, entries: object[], busy: boolean}} model */
-    render(model = {}) {
-      const slots = Array.isArray(model.slots) ? model.slots : [];
-      const filled = slots.filter((slot) => slot?.app).length;
-      const parts = [`${slots.length || 4} 个槽`, `已装入 ${filled} 个`];
-      if (model.runningSlot !== null && model.runningSlot !== undefined) {
-        parts.push(`运行中 OTA${model.runningSlot}`);
-      } else if (model.selected !== null && model.selected !== undefined) {
-        parts.push(`上次启动 OTA${model.selected}`);
-      }
-      slotsStatus.textContent = parts.join(" · ");
-      if (!slots.length) {
-        slotList.replaceChildren(el("p", { class: "library-empty" }, "正在读取平台分区表…"));
-        return;
-      }
-      slotList.replaceChildren(...slots.map((slot) => slotCard(slot, model)));
-    },
-  };
-
-  // Virtual launcher overlay -------------------------------------------------
-  function launcherItem(slot, model) {
-    const app = slot.app;
-    const meta = [];
-    if (app) {
-      if (app.version) meta.push(`v${app.version}`);
-      if (app.size) meta.push(formatBytes(app.size));
-    } else {
-      meta.push("空槽");
-    }
-    const run = app
-      ? button("启动", {
-        kind: "primary",
-        iconName: "play",
-        className: "launcher-run",
-        disabled: model.busy,
-      })
-      : chip("空", { kind: "neutral" });
-    if (app) {
-      run.addEventListener("click", () => dispatchSlots("launch", { slotIndex: slot.slotIndex }));
-    }
-    return el(
-      "article",
-      { class: ["launcher-item", app ? "is-filled" : "is-empty"].join(" ") },
-      el("span", { class: "launcher-item-slot" }, `OTA${slot.slotIndex}`),
-      el(
-        "div",
-        { class: "launcher-item-main" },
-        el("strong", { class: "launcher-item-name", title: app?.name ?? "空槽" }, app?.name ?? "空槽"),
-        el("span", { class: "launcher-item-meta" }, meta.join(" · ")),
-      ),
-      run,
-    );
+  placeLibrary();
+  window.addEventListener("resize", placeLibrary);
+  const sidebarMode = find("sidebar-mode");
+  const modeChoices = el("div", { class: "mode-choices", role: "radiogroup", "aria-label": "运行方式" });
+  const modeButtons = new Map();
+  for (const [value, label] of [["native", "本机加速"], ["wasm", "浏览器"]]) {
+    const choice = button(label, { id: `mode-${value}`, className: "mode-choice" });
+    choice.setAttribute("role", "radio");
+    choice.addEventListener("click", () => {
+      if (choice.disabled || refs.mode.value === value) return;
+      refs.mode.value = value;
+      refs.mode.dispatchEvent(new CustomEvent("change", { bubbles: true }));
+    });
+    modeButtons.set(value, choice); modeChoices.append(choice);
   }
-
-  const launcherApi = {
-    render(model = {}) {
-      const slots = Array.isArray(model.slots) ? model.slots : [];
-      const filled = slots.filter((slot) => slot?.app).length;
-      launcherList.replaceChildren(...slots.map((slot) => launcherItem(slot, model)));
-      refs.launcherHint.textContent = filled
-        ? `${filled} 个应用已装入 · 选择后从对应槽启动`
-        : "槽为空：先在「应用槽」面板装入纯 app 包";
-    },
-    show(model = {}) {
-      launcherApi.render(model);
-      refs.launcherOverlay.hidden = false;
-      refs.app.classList.add("launcher-open");
-    },
-    hide() {
-      refs.launcherOverlay.hidden = true;
-      refs.app.classList.remove("launcher-open");
-    },
-    get visible() {
-      return !refs.launcherOverlay.hidden;
-    },
-  };
-
-  // `#slot-list` is created above; the launcher list comes from static markup.
-  const launcherList = refs.launcherList;
-
-  // Audio panel -------------------------------------------------------------
-  const outMeter = meter({ label: "扬声器输出", id: "audio-out-level" });
-  const inMeter = meter({ label: "麦克风输入", id: "audio-in-level" });
-  const micButton = button("启用麦克风", { id: "mic", iconName: "mic" });
-  micButton.setAttribute("aria-pressed", "false");
-
-  mountPanel(
-    "audio",
-    "panel-audio",
-    el(
-      "div",
-      { class: "panel-head" },
-      el("p", { class: "eyebrow" }, "声音"),
-      el("h2", { class: "panel-title" }, "音频"),
-      el("p", { class: "panel-subtitle" }, "扬声器与麦克风的实时电平。音量与静音位于底部控制栏。"),
-    ),
-    el(
-      "div",
-      { class: "audio-block" },
-      el(
-        "div",
-        { class: "audio-block-head" },
-        el("h3", {}, "扬声器"),
-        el("div", { class: "audio-tags" }, chip("16 kHz"), chip("16-bit"), chip("立体声")),
-      ),
-      outMeter.el,
-    ),
-    el(
-      "div",
-      { class: "audio-block" },
-      el(
-        "div",
-        { class: "audio-block-head" },
-        el("h3", {}, "麦克风"),
-        el("div", { class: "audio-tags" }, chip("16 kHz"), chip("32-bit"), chip("单声道")),
-      ),
-      el(
-        "div",
-        { class: "mic-row" },
-        el(
-          "p",
-          { class: "field-hint" },
-          "默认关闭。启用时浏览器会请求麦克风权限，声音只送入虚拟设备。",
-        ),
-        micButton,
-      ),
-      inMeter.el,
-    ),
-    el(
-      "p",
-      { class: "panel-note" },
-      "电平显示的是模拟器观测值；实际采样格式以固件初始化为准。",
-    ),
-  );
+  modeChoices.addEventListener("keydown", event => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    const enabled = [...modeButtons.values()].filter(node => !node.disabled);
+    if (!enabled.length) return;
+    event.preventDefault(); event.stopPropagation();
+    const index = enabled.findIndex(node => node.getAttribute("aria-checked") === "true");
+    const target = event.key === "Home" ? enabled[0] : event.key === "End" ? enabled.at(-1)
+      : enabled[(index + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 1) + enabled.length) % enabled.length];
+    target.focus(); target.click();
+  });
+  const modeDescription = el("p", { id: "mode-description", class: "mode-description" });
+  function describeMode() {
+    for (const [value, node] of modeButtons) {
+      node.setAttribute("aria-checked", String(refs.mode.value === value));
+      node.tabIndex = refs.mode.value === value ? 0 : -1;
+      node.disabled = value === "native" && nativeOption.disabled;
+      node.title = node.disabled ? "需要本机运行环境；Windows 使用 Ubuntu WSL" : "";
+    }
+    modeDescription.textContent = refs.mode.value === "native"
+      ? "通常更流畅。使用本机运行环境，Windows 需要 Ubuntu WSL。"
+      : "直接在浏览器运行，无需 WSL；较复杂的固件可能更慢。";
+  }
+  refs.mode.addEventListener("change", describeMode);
+  if (sidebarMode) { refs.mode.hidden = true; sidebarMode.append(refs.mode, modeChoices, modeDescription); }
+  describeMode();
 
   // Developer panel shells (filled by other modules) ------------------------
   mountPanel(
@@ -518,64 +242,10 @@ export function createUI(root) {
   mountPanel(
     "debug",
     "panel-debug",
+    ...(sidebarMode ? [] : [el("label", { class: "select-field" }, el("span", {}, "运行方式"), refs.mode)]),
+    el("details", { class: "tool-import" }, el("summary", {}, "从链接打开固件"), urlForm),
     el("div", { class: "inspector-mount panel-mount", "aria-label": "设备检查器" }),
     el("div", { class: "macro-mount panel-mount", "aria-label": "输入宏" }),
-  );
-
-  // About panel -------------------------------------------------------------
-  mountPanel(
-    "about",
-    "panel-about",
-    el(
-      "div",
-      { class: "panel-head" },
-      el("p", { class: "eyebrow" }, "参考板型"),
-      el("h2", { class: "panel-title" }, "关于"),
-      el(
-        "p",
-        { class: "panel-subtitle" },
-        "谷仓次元屏模拟器在本机运行 ESP32-S3 圆屏固件，浏览器模式与本机加速共用同一份整机镜像。",
-      ),
-    ),
-    el(
-      "dl",
-      { class: "info-grid" },
-      el("dt", {}, "开发板"),
-      el("dd", {}, "ESP32-S3-R8 · 32 MB Flash · 8 MB Octal PSRAM"),
-      el("dt", {}, "屏幕"),
-      el("dd", {}, "360 × 360 ST77916 QSPI · RGB565 圆屏"),
-      el("dt", {}, "触摸"),
-      el("dd", {}, "CST816S · I²C 地址 0x15"),
-      el("dt", {}, "按键"),
-      el("dd", {}, "侧键 GPIO6 · 电源闩锁 GPIO7"),
-      el("dt", {}, "音频"),
-      el("dd", {}, "I²S 扬声器 16 kHz 立体声 · 麦克风 16 kHz 单声道"),
-      el("dt", {}, "运行方式"),
-      el("dd", {}, "浏览器 WASM，或 x86-64 Linux / Ubuntu WSL 本机加速"),
-      el("dt", {}, "网络"),
-      el("dd", {}, "虚拟热点 myssid · 密码 mypassword（设备配网页选它）"),
-      el("dt", {}, "固件来源"),
-      el("dd", {}, "内置示例、本地 BIN、http(s) 链接；纯 app 包自动拼装"),
-    ),
-    el(
-      "p",
-      { class: "panel-note" },
-      "BLE、NFC、电池与真实射频不在模拟范围内。需要配网的固件请选虚拟热点 myssid，密码 mypassword。",
-    ),
-    el(
-      "p",
-      { class: "about-links" },
-      el(
-        "a",
-        {
-          href: "https://github.com/espressif/esp-emulator",
-          target: "_blank",
-          rel: "noreferrer noopener",
-        },
-        "ESP-EMU 上游 ↗",
-      ),
-      el("span", { class: "about-version" }, "模拟器界面 v0.1.0"),
-    ),
   );
 
   // Elements exposed to the app layer --------------------------------------
@@ -597,7 +267,6 @@ export function createUI(root) {
     tabs: tabsElement,
     tabButtons: tabController.buttons,
     panelHost: refs.panelHost,
-    run: refs.run,
     restart: refs.restart,
     reset: refs.reset,
     mute: refs.mute,
@@ -606,7 +275,6 @@ export function createUI(root) {
     record: refs.record,
     fullscreen: refs.fullscreen,
     dev: refs.dev,
-    share: refs.share,
     mic: micButton,
     fileInput: refs.fileInput,
     urlInput,
@@ -616,8 +284,6 @@ export function createUI(root) {
     addFileButton,
     libraryList,
     libraryPanel,
-    runCta: refs.runCtaButton,
-    onboarding: refs.onboarding,
     toastHost: toastContainer,
     errorCard: refs.errorCard,
     consoleMount: refs.panelHost.querySelector(".console-mount"),
@@ -629,7 +295,7 @@ export function createUI(root) {
   // Status / firmware / mode ------------------------------------------------
   function setStatus(text) {
     const message = text == null ? "" : String(text);
-    refs.statusText.textContent = message;
+    refs.statusText.textContent = ({ idle: "未启动", preparing: "准备中", starting: "启动中", waiting: "等待画面", running: "运行中", error: "异常" })[app.dataset.phase] ?? message;
     refs.status.title = message;
     refs.status.classList.toggle("is-idle", !message);
   }
@@ -638,10 +304,11 @@ export function createUI(root) {
     const hasInfo = Boolean(info && typeof info === "object");
     refs.firmwareMeta.classList.toggle("has-firmware", hasInfo);
     if (!hasInfo) {
-      refs.firmwareName.textContent = "未载入固件";
+      refs.firmwareName.textContent = "设备预览";
+      currentName.textContent = "尚未打开固件";
       refs.firmwareName.removeAttribute("title");
       refs.firmwareVersion.hidden = true;
-      refs.runCtaButton.textContent = "运行示例固件";
+
       return;
     }
     const meta = info.app && typeof info.app === "object" ? info.app : info;
@@ -650,6 +317,7 @@ export function createUI(root) {
     const project = meta.project && meta.project !== "—" ? meta.project : "";
     const idf = meta.idf && meta.idf !== "—" ? meta.idf : "";
     refs.firmwareName.textContent = name;
+    currentName.textContent = name;
     const details = [name];
     if (project && project !== name) details.push(`工程 ${project}`);
     if (idf) details.push(`IDF ${idf}`);
@@ -661,7 +329,7 @@ export function createUI(root) {
     } else {
       refs.firmwareVersion.hidden = true;
     }
-    refs.runCtaButton.textContent = "运行所选固件";
+
   }
 
   function setNativeAvailable(available) {
@@ -672,14 +340,14 @@ export function createUI(root) {
     refs.mode.title = enabled
       ? "运行方式：本机加速或浏览器"
       : "本机加速需要 x86-64 Linux 或 Windows 上的 Ubuntu WSL；当前使用浏览器模式";
-    refs.onboardingNative.textContent = enabled ? "当前环境可用" : "当前环境不可用";
-    refs.onboardingNative.dataset.state = enabled ? "available" : "unavailable";
     if (!enabled && refs.mode.value === "native") refs.mode.value = "wasm";
+    describeMode();
   }
 
   function setMode(mode) {
     const option = [...refs.mode.options].find((item) => item.value === mode && !item.disabled);
     refs.mode.value = option ? option.value : "wasm";
+    describeMode();
     return refs.mode.value;
   }
 
@@ -688,13 +356,19 @@ export function createUI(root) {
     const def = TAB_DEFS.find((item) => item.id === name);
     if (!def) return false;
     if (def.devOnly && !devMode) setDevMode(true);
-    if (!tabController.select(name, { notify: false })) return false;
+    if (def.devOnly && !tabController.select(name, { notify: false })) return false;
+    app.dataset.surface = def.devOnly ? "tools" : name;
+    refs.tabsHost.hidden = !def.devOnly;
     activePanel = name;
+    const dock = find("dock-open");
+    if (dock) dock.setAttribute("aria-expanded", String(Boolean(def.devOnly)));
+    workspace.panel(name, def.devOnly ? "开发工具" : def.label);
     for (const id of activePanelIds) {
       const section = refs.panelHost.querySelector(`#panel-${id}`);
       if (section) section.hidden = id !== name;
     }
     refs.panelHost.scrollTop = 0;
+    if (def.devOnly) tabController.buttons.get(name)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
     return true;
   }
 
@@ -704,10 +378,10 @@ export function createUI(root) {
     refs.dev.setAttribute("aria-pressed", String(devMode));
     for (const item of TAB_DEFS) {
       const node = tabController.buttons.get(item.id);
-      if (node) node.hidden = Boolean(item.devOnly && !devMode);
+      if (node) node.hidden = !item.devOnly || !devMode;
     }
     if (!devMode && TAB_DEFS.find((item) => item.id === activePanel)?.devOnly) {
-      showPanel("library");
+      workspace.close();
     }
   }
 
@@ -766,109 +440,6 @@ export function createUI(root) {
   }
 
   // Library panel -----------------------------------------------------------
-  function entryCard(entry) {
-    const isMarket = entry.kind === "market";
-    const run = button(isMarket ? "即将上线" : "运行", {
-      kind: "primary",
-      iconName: "play",
-      className: "firmware-run",
-      disabled: isMarket || busyFlag,
-    });
-    if (isMarket) run.dataset.alwaysDisabled = "true";
-    run.addEventListener("click", () => dispatchLibrary("run", { entry: { ...entry } }));
-
-    let remove = null;
-    if (entry.kind !== "sample" && !isMarket) {
-      remove = button("移除", {
-        iconOnly: true,
-        iconName: "trash",
-        ariaLabel: `移除 ${entry.name}`,
-        className: "firmware-remove",
-      });
-      remove.disabled = busyFlag;
-      remove.addEventListener("click", () => dispatchLibrary("remove", { entry: { ...entry } }));
-    }
-
-    return el(
-      "article",
-      {
-        class: [
-          "firmware-card",
-          `kind-${entry.kind}`,
-          isMarket ? "is-disabled" : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
-        dataset: { id: entry.id },
-      },
-      el(
-        "div",
-        { class: "firmware-card-main" },
-        el(
-          "div",
-          { class: "firmware-title-row" },
-          el("h3", { class: "firmware-name", title: entry.name }, entry.name),
-          chip(KIND_LABELS[entry.kind] ?? entry.kind, {
-            kind: "neutral",
-            className: "firmware-kind",
-          }),
-        ),
-        el("p", { class: "firmware-source", title: entry.source }, sourceText(entry)),
-        el(
-          "div",
-          { class: "firmware-meta" },
-          entry.version ? chip(`v${entry.version}`) : null,
-          entry.project ? el("span", { class: "firmware-project" }, entry.project) : null,
-          el(
-            "span",
-            { class: "firmware-size" },
-            entry.size ? formatBytes(entry.size) : entry.kind === "sample" ? "运行后读取" : "大小未知",
-          ),
-          entry.lastUsed ? el("span", { class: "firmware-used" }, relativeTime(entry.lastUsed)) : null,
-        ),
-      ),
-      el("div", { class: "firmware-actions" }, run, remove),
-    );
-  }
-
-  const libraryApi = {
-    /** @param {Array<object>} entries */
-    render(entries = []) {
-      const list = Array.isArray(entries) ? entries : [];
-      if (!list.length) {
-        libraryList.replaceChildren(
-          el("p", { class: "library-empty" }, "固件会显示在这里。可以先运行示例或添加本地文件。"),
-        );
-        return;
-      }
-      libraryList.replaceChildren(...list.map(entryCard));
-    },
-    /** @param {boolean} busy */
-    setBusy(busy) {
-      busyFlag = Boolean(busy);
-      libraryPanel.classList.toggle("is-busy", busyFlag);
-      libraryBusy.hidden = !busyFlag;
-      for (const control of [sampleButton, addFileButton, urlInput, urlSha, addUrlButton]) {
-        control.disabled = busyFlag;
-      }
-      for (const control of libraryList.querySelectorAll("button")) {
-        control.disabled = busyFlag || control.dataset.alwaysDisabled === "true";
-      }
-    },
-  };
-
-  function submitUrl() {
-    if (busyFlag) return;
-    const url = urlInput.value.trim();
-    if (!url) {
-      toast("请先填写固件链接", "warning");
-      urlInput.focus();
-      return;
-    }
-    const sha256 = urlSha.value.trim() || undefined;
-    dispatchLibrary("url", { url, sha256 });
-  }
-
   // Running / audio states --------------------------------------------------
   function setRecording(recording) {
     const active = Boolean(recording);
@@ -878,7 +449,7 @@ export function createUI(root) {
     refs.record.setAttribute("aria-label", active ? "停止录屏" : "开始录屏");
     refs.record.replaceChildren(
       icon(active ? "stop" : "record", { size: 16 }),
-      el("span", { class: "btn-label" }, active ? "停止" : "录屏"),
+      el("span", { class: "btn-label" }, active ? "停止录屏" : "录屏"),
     );
     app.classList.toggle("is-recording", active);
   }
@@ -898,22 +469,26 @@ export function createUI(root) {
     const level = Number.isFinite(numeric) ? Math.min(1, Math.max(0, numeric)) : 0;
     const percent = Math.round(level * 100);
     refs.volume.value = String(percent);
+    const volumeValue = find("volume-value");
+    if (volumeValue) volumeValue.textContent = `${percent}%`;
     refs.volume.style.setProperty("--volume-fill", `${percent}%`);
     refs.volume.setAttribute("aria-valuetext", `${percent}%`);
     return level;
   }
 
-  function setAudioLevels(levels = {}) {
-    if (levels.out !== undefined) outMeter.set(levels.out);
-    if (levels.in !== undefined) inMeter.set(levels.in);
+  function updateControlHints() {
+    for (const [node, action] of [[refs.restart, "重启设备，保留设置和进度"], [refs.screenshot, "保存截图"], [refs.record, "录制页面与声音"], [refs.fullscreen, "全屏显示"]]) {
+      const reason = node.disabled ? "请先打开固件，等待画面就绪" : action;
+      if (!(node === refs.record && node.getAttribute("aria-pressed") === "true")) node.title = reason;
+      node.setAttribute("aria-description", reason);
+    }
   }
-
-  function setMicActive(active) {
-    const on = Boolean(active);
-    micButton.setAttribute("aria-pressed", String(on));
-    micButton.classList.toggle("is-active", on);
-    setButtonLabel(micButton, on ? "停止麦克风" : "启用麦克风");
-  }
+  const controls = app.querySelector(".control-bar");
+  controls?.addEventListener("pointermove", event => {
+    const node = event.target.closest?.("button");
+    controls.dataset.hint = node?.disabled ? node.title : "";
+  });
+  controls?.addEventListener("pointerleave", () => { controls.dataset.hint = ""; });
 
   function setRunning(running) {
     const active = Boolean(running);
@@ -923,74 +498,17 @@ export function createUI(root) {
     }
     app.classList.toggle("is-running", active);
     app.classList.toggle("has-run", hasRun);
-    refs.run.disabled = active;
     refs.restart.disabled = !hasRun;
     refs.reset.disabled = !hasRun;
-    refs.screenshot.disabled = !hasRun;
+    refs.screenshot.disabled = !screenReady;
+    refs.fullscreen.disabled = !screenReady;
     refs.record.disabled = !active;
     refs.side.disabled = !active;
-    refs.runCta.hidden = active;
-    refs.canvas.setAttribute("aria-busy", String(active));
+    updateControlHints();
+
     if (active) refs.errorCard.hidden = true;
     if (!active) setRecording(false);
   }
-
-  // Onboarding --------------------------------------------------------------
-  const onboardingApi = {
-    show() {
-      if (onboardingOpen) return;
-      onboardingOpen = true;
-      onboardingReturnFocus = document.activeElement;
-      refs.onboarding.hidden = false;
-      document.body.classList.add("onboarding-open");
-      requestAnimationFrame(() => need("onboarding-sample").focus());
-    },
-    hide() {
-      if (!onboardingOpen) return;
-      onboardingOpen = false;
-      refs.onboarding.hidden = true;
-      document.body.classList.remove("onboarding-open");
-      if (onboardingReturnFocus && typeof onboardingReturnFocus.focus === "function") {
-        onboardingReturnFocus.focus();
-      }
-      onboardingReturnFocus = null;
-    },
-  };
-
-  need("onboarding-close").addEventListener("click", () => {
-    dispatchOnboarding("dismiss");
-    onboardingApi.hide();
-  });
-  need("onboarding-sample").addEventListener("click", () => {
-    dispatchLibrary("sample");
-    dispatchOnboarding("sample");
-    onboardingApi.hide();
-  });
-  need("onboarding-file").addEventListener("click", () => {
-    dispatchOnboarding("file");
-    refs.fileInput.click();
-  });
-  need("onboarding-url").addEventListener("click", () => {
-    dispatchOnboarding("url");
-    onboardingApi.hide();
-    showPanel("library");
-    urlInput.focus();
-  });
-  refs.onboarding.addEventListener("click", (event) => {
-    if (
-      event.target === refs.onboarding ||
-      (event.target instanceof Element && event.target.classList.contains("onboarding-backdrop"))
-    ) {
-      dispatchOnboarding("dismiss");
-      onboardingApi.hide();
-    }
-  });
-  refs.onboarding.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      dispatchOnboarding("dismiss");
-      onboardingApi.hide();
-    }
-  });
 
   // Error card --------------------------------------------------------------
   need("error-close").addEventListener("click", () => showError(null));
@@ -1020,54 +538,26 @@ export function createUI(root) {
     touchHideTimer = setTimeout(() => refs.touchOverlay.classList.remove("is-visible"), 200);
   });
 
-  // Share link --------------------------------------------------------------
-  function fallbackCopy(text) {
-    const area = el("textarea", { class: "sr-only", "aria-hidden": "true" });
-    area.value = text;
-    document.body.append(area);
-    area.select();
-    const copied = document.execCommand("copy");
-    area.remove();
-    if (!copied) throw new Error("copy failed");
-  }
-
-  async function copyShareLink() {
-    const url = window.location.href;
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(url);
-      else fallbackCopy(url);
-      toast("页面链接已复制", "success");
-    } catch {
-      try {
-        fallbackCopy(url);
-        toast("页面链接已复制", "success");
-      } catch {
-        toast("复制失败，请手动复制地址栏链接", "error");
-      }
-    }
-  }
-
   // Wiring ------------------------------------------------------------------
-  refs.dev.addEventListener("click", () => setDevMode(!devMode));
-  refs.share.addEventListener("click", copyShareLink);
-  refs.launcher.addEventListener("click", () => dispatchSlots("open-launcher"));
+  need("open-firmware").addEventListener("click", () => refs.fileInput.click());
+  need("try-sample").addEventListener("click", () => dispatchLibrary("sample"));
+  if (need("recent-open").tagName === "BUTTON") need("recent-open").addEventListener("click", () => sidebarLibrary ? libraryList.scrollIntoView({ block: "nearest" }) : showPanel("library"));
+  find("sound-open")?.addEventListener("click", () => showPanel("sound"));
+  find("mobile-recent")?.addEventListener("click", () => showPanel("library"));
+
+  find("dock-open")?.addEventListener("click", () => {
+    if (app.dataset.panelOpen === "true" && app.dataset.surface === "tools") workspace.close();
+    else app.dispatchEvent(new CustomEvent("sdg:tools", { bubbles: true }));
+  });
+
+  need("setup-open").addEventListener("click", () => { networkHelp.hidden = !networkHelp.hidden; });
   refs.launcherClose.addEventListener("click", () => dispatchSlots("close-launcher"));
-  launcherOpenButton.addEventListener("click", () => dispatchSlots("open-launcher"));
-  refs.runCtaButton.addEventListener("click", () => {
-    if (!refs.run.disabled) refs.run.click();
-  });
-  sampleButton.addEventListener("click", () => dispatchLibrary("sample"));
-  addFileButton.addEventListener("click", () => refs.fileInput.click());
-  urlForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    submitUrl();
-  });
   refs.volume.addEventListener("input", () => {
     const percent = Number(refs.volume.value) || 0;
     refs.volume.style.setProperty("--volume-fill", `${percent}%`);
     refs.volume.setAttribute("aria-valuetext", `${percent}%`);
+    find("volume-value").textContent = `${percent}%`;
   });
-  refs.fileInput.addEventListener("change", () => onboardingApi.hide());
 
   // Initial state -----------------------------------------------------------
   setRunning(false);
@@ -1076,19 +566,36 @@ export function createUI(root) {
   setMicActive(false);
   setDevMode(false);
   showPanel("library");
+  workspace.close();
   setStatus(refs.statusText.textContent || "等待载入固件");
   setAudioLevels({ out: 0, in: 0 });
 
   return {
     elements,
     setStatus,
+    toggleTools() {
+      if (app.dataset.panelOpen === "true" && app.dataset.surface === "tools") { workspace.close(); return true; }
+      return false;
+    },
+    setPhase(phase) {
+      if (phase === "preparing") { need("setup-open").hidden = true; networkHelp.hidden = true; }
+      workspace.phase(phase);
+      screenReady = phase === "running";
+      refs.screenshot.disabled = !screenReady;
+      refs.fullscreen.disabled = !screenReady;
+      updateControlHints();
+    },
+    confirmClear: confirmClearData,
     setMode,
     setFirmwareInfo,
     setNativeAvailable,
     showPanel,
+    showSetupHelp() {
+      need("setup-open").hidden = false;
+      // Provisioning never opens a panel or steals focus. Help stays in settings.
+    },
     setDevMode,
     toast,
-    onboarding: onboardingApi,
     library: libraryApi,
     slots: slotsApi,
     launcher: launcherApi,

@@ -283,6 +283,19 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args) -> None:
         pass
 
+    def send_header(self, keyword, value) -> None:
+        if keyword.lower() == "cache-control":
+            self._cache_control = True
+        super().send_header(keyword, value)
+
+    def end_headers(self) -> None:
+        # Web assets carry no version hash, and the worklet is fetched by URL: a
+        # cached copy keeps showing the previous panel after a rebuild.
+        if not getattr(self, "_cache_control", False):
+            self.send_header("Cache-Control", "no-cache")
+        self._cache_control = False
+        super().end_headers()
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0].split("#", 1)[0]
         if path == "/api/status":

@@ -7,30 +7,30 @@
 .stats-panel,
 .inspector-panel,
 .macro-panel {
-  --debug-bg: #151b17;
-  --debug-surface: #1d2620;
-  --debug-surface-strong: #243128;
-  --debug-sunken: #101512;
-  --debug-border: #3b4c3f;
-  --debug-border-soft: #2c382f;
-  --debug-text: #f5f1e7;
-  --debug-muted: #9db3a1;
-  --debug-accent: #aad8ac;
-  --debug-warn: #e5c57b;
-  --debug-error: #ef9a8a;
-  --debug-info: #9fc6d4;
-  --debug-debug: #c3a8d8;
-  --debug-mono: "JetBrains Mono", "Cascadia Mono", Consolas, "Courier New", monospace;
+  --debug-bg: var(--surface);
+  --debug-surface: var(--surface-raised);
+  --debug-surface-strong: #eaf0fe;
+  --debug-sunken: #f7f9fc;
+  --debug-border: var(--border-strong);
+  --debug-border-soft: var(--border);
+  --debug-text: var(--text);
+  --debug-muted: var(--muted);
+  --debug-accent: var(--accent);
+  --debug-warn: #976319;
+  --debug-error: #b3323c;
+  --debug-info: var(--text-soft);
+  --debug-debug: #7853a2;
+  --debug-mono: var(--font-mono);
   box-sizing: border-box;
   min-width: 0;
   color: var(--debug-text);
   background: var(--debug-bg);
   border: 1px solid var(--debug-border);
   border-radius: 12px;
-  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-  font-size: 13px;
-  line-height: 1.45;
-  color-scheme: dark;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  color-scheme: light;
 }
 
 .console-panel *,
@@ -62,19 +62,20 @@
 .macro-panel input,
 .console-panel select,
 .inspector-panel select {
-  font: inherit;
-  color: var(--debug-text);
-  background: var(--debug-sunken);
-  border: 1px solid var(--debug-border);
-  border-radius: 6px;
-  padding: 5px 8px;
+  font: 14px/1.5 var(--font-sans);
+  color: var(--text);
+  background-color: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  padding: 6px 12px;
   min-width: 0;
-  min-height: 0;
+  min-height: var(--control-height-compact);
 }
+.console-panel select,.inspector-panel select { padding-right: 36px; }
 
 .console-panel input::placeholder,
 .macro-panel input::placeholder {
-  color: #6f8375;
+  color: var(--debug-muted);
 }
 
 .console-panel :focus-visible,
@@ -96,13 +97,15 @@
   justify-content: center;
   gap: 4px;
   font: inherit;
-  font-size: 12px;
-  line-height: 1.2;
-  padding: 5px 10px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.3;
+  min-height: var(--control-height-compact);
+  padding: 6px 12px;
   color: var(--debug-text);
-  background: linear-gradient(#2a3a2e, #223028);
-  border: 1px solid #4c6250;
-  border-radius: 6px;
+  background: var(--debug-surface);
+  border: 1px solid var(--debug-border);
+  border-radius: 9px;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -112,8 +115,8 @@
 .console-send:hover:not(:disabled),
 .inspector-btn:hover:not(:disabled),
 .macro-btn:hover:not(:disabled) {
-  background: linear-gradient(#33463a, #28392f);
-  border-color: #66826c;
+  background: var(--debug-surface-strong);
+  border-color: var(--debug-accent);
 }
 
 .console-btn:active:not(:disabled),
@@ -134,19 +137,19 @@
 .console-btn.is-active {
   color: var(--debug-warn);
   border-color: #7a6a3f;
-  background: #332d1e;
+  background: #fff6e5;
 }
 
 .inspector-btn.is-danger,
 .macro-btn.is-danger {
-  color: #f0b3a7;
+  color: var(--debug-error);
   border-color: #7a463f;
-  background: #33231f;
+  background: #fff1f2;
 }
 
 .inspector-btn.is-danger:hover:not(:disabled),
 .macro-btn.is-danger:hover:not(:disabled) {
-  background: #432b25;
+  background: #ffe5e8;
 }
 
 /* ---------- Serial console ---------- */
@@ -168,7 +171,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: #182019;
+  background: var(--debug-surface);
   border-bottom: 1px solid var(--debug-border);
 }
 
@@ -232,11 +235,11 @@
 }
 
 .console-line:hover {
-  background: #18211b;
+  background: var(--debug-surface);
 }
 
 .console-time {
-  color: #77897b;
+  color: var(--debug-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -280,7 +283,7 @@
   display: flex;
   gap: 6px;
   padding: 8px 10px;
-  background: #182019;
+  background: var(--debug-surface);
   border-top: 1px solid var(--debug-border);
 }
 
@@ -353,7 +356,7 @@
 
 @keyframes debug-flash {
   0% {
-    background: #3a4a2f;
+    background: #eaf0fe;
     border-color: var(--debug-accent);
   }
   100% {
@@ -373,7 +376,7 @@
 
 .inspector-mode {
   color: var(--debug-accent);
-  background: #1a241c;
+  background: var(--debug-surface);
   border: 1px solid var(--debug-border);
   border-radius: 999px;
   padding: 2px 9px;
@@ -431,7 +434,7 @@
   margin: 0;
   padding: 6px 8px;
   color: var(--debug-warn);
-  background: #2b2618;
+  background: #fff7e8;
   border: 1px dashed #6a5c35;
   border-radius: 6px;
   font-size: 11px;
@@ -494,7 +497,7 @@
 .inspector-table th {
   padding: 6px 8px;
   color: var(--debug-muted);
-  background: #1a241c;
+  background: var(--debug-surface);
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
@@ -530,7 +533,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 4px 8px;
-  background: #161f1a;
+  background: var(--debug-surface);
   border: 1px solid var(--debug-border-soft);
   border-radius: 6px;
   font-family: var(--debug-mono);
@@ -557,7 +560,7 @@
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
-  background: #161f1a;
+  background: var(--debug-surface);
   border: 1px solid var(--debug-border-soft);
   border-radius: 6px;
   font-size: 11px;
@@ -617,7 +620,7 @@
   padding: 10px;
   max-height: 260px;
   overflow: auto;
-  background: #0f1411;
+  background: var(--debug-sunken);
   border: 1px solid var(--debug-border);
   border-radius: 8px;
   font-family: var(--debug-mono);
@@ -662,8 +665,8 @@
   padding: 10px;
   max-height: 240px;
   overflow: auto;
-  color: #f3c0b4;
-  background: #241512;
+  color: var(--debug-error);
+  background: #fff1f2;
   border: 1px solid #7a463f;
   border-radius: 8px;
   font-family: var(--debug-mono);
@@ -742,7 +745,7 @@
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  background: #161f1a;
+  background: var(--debug-surface);
   border: 1px solid var(--debug-border-soft);
   border-radius: 8px;
 }
@@ -862,3 +865,14 @@
     transition: none;
   }
 }
+
+/* Interface controls share the main theme; code and numeric data stay monospace. */
+.console-search,.console-filter { font-size: 14px; }
+.console-input { font-family: var(--font-sans); font-size: 14px; }
+.console-lines { font-size: 13px; line-height: 1.65; }
+.inspector-title,.stats-title,.macro-title { color: var(--text); font-size: 15px; font-weight: 600; }
+.console-panel .console-level { font-size: 12px; }
+.console-panel :is(input,select):hover:not(:disabled),
+.inspector-panel :is(input,select):hover:not(:disabled),
+.macro-panel input:hover:not(:disabled) { border-color: #a9adb7; }
+.console-btn:focus-visible,.console-send:focus-visible,.inspector-btn:focus-visible,.macro-btn:focus-visible { outline-color: var(--focus); outline-offset: 3px; }

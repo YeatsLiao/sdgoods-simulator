@@ -3,98 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#0e1210">
-  <meta name="description" content="在本机运行 ESP32-S3 次元屏固件：示例、本地 BIN 与固件链接。">
-  <title>谷仓次元屏模拟器</title>
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#F8F8F6">
+  <meta name="description" content="打开 BIN，在虚拟次元屏上运行和调试。">
+  <title>次元屏工作台 · SDGOODS</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./css/base.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/panels.css">
   <link rel="stylesheet" href="./css/debug.css">
+  <link rel="stylesheet" href="./css/device.css">
+  <link rel="stylesheet" href="./css/workbench-panels.css">
 </head>
-<!--
-  界面契约（web/js/ui/panels.js 的 createUI(root) 读取以下 ID）
-  设备：#screen #side #touch-overlay #touch-dot #touch-readout #run-cta #run-cta-button
-  头部：#status #status-text #firmware-meta #firmware-name #firmware-version #mode #dev #share
-  面板：#tabs #panel-host；调试挂载点 .console-mount .stats-mount .inspector-mount .macro-mount
-  控制栏：#run #restart #reset #launcher #mute #volume #screenshot #record #fullscreen
-  固件库：#file #url #url-sha #url-add #library-list #library-sample #library-file #library-busy
-  应用槽：#slot-list #launcher-open #launcher-overlay #launcher-list #launcher-close
-  音频：#mic
-  引导/错误：#onboarding #onboarding-native #onboarding-sample #onboarding-file #onboarding-url
-  事件：panelHost 触发 sdg:library（action: sample|url|run|remove|favorite，附 url/sha256/entry）；
-        #app 触发 sdg:slots（action: assign|launch|clear|open-launcher|close-launcher）；
-        onboarding 触发 sdg:onboarding（action: dismiss|sample|file|url）。
-  CSS 加载顺序：base → layout → panels → debug。debug.css 由调试模块维护。
--->
 <body>
-  <div id="app" class="app">
+  <div id="app" class="app" data-phase="idle" data-panel-open="false">
     <header class="app-header">
-      <div class="brand" aria-label="谷仓次元屏模拟器">
-        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" fill="none">
-          <circle cx="16" cy="16" r="13" stroke="currentColor" stroke-width="1.6"></circle>
-          <circle cx="16" cy="16" r="6.2" stroke="currentColor" stroke-width="1.6" opacity="0.55"></circle>
-          <circle cx="16" cy="16" r="2" fill="currentColor"></circle>
-        </svg>
-        <div class="brand-text">
-          <h1 class="brand-name"><span class="brand-full">谷仓次元屏</span><span class="brand-short">次元屏</span></h1>
-          <span>模拟器</span>
-        </div>
-      </div>
-
-      <div id="firmware-meta" class="current-firmware">
-        <span id="firmware-name">未载入固件</span>
-        <span id="firmware-version" class="chip firmware-version" hidden></span>
-      </div>
-
-      <span id="status" class="status is-idle" role="status" aria-live="polite" title="等待载入固件">
-        <span class="status-dot" aria-hidden="true"></span>
-        <span id="status-text" class="status-text">等待载入固件</span>
-      </span>
-
-      <div class="header-actions">
-        <label class="select-field">
-          <span class="select-label">运行方式</span>
-          <select id="mode" aria-label="运行方式" title="运行方式">
-            <option value="wasm">浏览器</option>
-            <option value="native" disabled>本机加速</option>
-          </select>
-        </label>
-        <button id="dev" class="toggle-btn" type="button" aria-pressed="false" title="开发者模式：显示串口、性能与调试面板">开发者</button>
-        <button id="share" class="btn btn-icon" type="button" aria-label="复制页面链接" title="复制页面链接"></button>
-      </div>
+      <a class="brand" href="./" aria-label="次元屏工作台首页">
+        <span class="brand-mark official-mark" aria-hidden="true"><span>G</span><img src="./assets/brand/sdgoods-logo.webp" alt="" onerror="this.hidden=true"></span><h1>谷仓 <span class="brand-divider">·</span> 次元屏模拟器</h1>
+      </a>
+      <div class="header-actions"></div>
     </header>
-
     <main class="app-main">
+      <aside class="welcome" aria-labelledby="welcome-title">
+        <h2 id="welcome-title">固件</h2>
+        <button id="open-firmware" class="btn btn-primary hero-open" type="button"><svg class="icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5"/></svg>打开 BIN</button>
+        <button id="try-sample" class="text-action hero-sample" type="button">试玩示例</button>
+        <section class="sidebar-recent"><h2 id="recent-open">最近使用</h2><div id="sidebar-library"></div></section>
+        <section class="sidebar-runtime"><h2>运行方式</h2><div id="sidebar-mode"></div></section>
+        <div class="sidebar-bottom"><button id="mobile-recent" class="text-action" type="button">最近</button><button id="dev" data-label="开发工具" class="btn" type="button" aria-pressed="false">开发工具 <span aria-hidden="true">›</span></button></div>
+      </aside>
       <section class="device-column" aria-label="虚拟次元屏">
-        <div class="device-stage">
+        <div class="preview-top"><div id="firmware-meta" class="current-firmware"><span id="firmware-name">设备预览</span><span id="firmware-version" class="chip" hidden></span></div><div class="stage-status"><span id="status" class="status" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="status-text">未启动</span></span></div></div>
+        <div class="device-stage" data-key-hint="侧键 · 空格">
           <div class="device-bezel">
-            <canvas id="screen" width="360" height="360" aria-label="360 × 360 圆形触摸屏">360 × 360 圆形触摸屏</canvas>
-
+            <canvas id="screen" width="360" height="360" aria-label="360 × 360 圆形触摸屏">需要浏览器支持 Canvas</canvas>
             <div id="run-cta" class="run-cta">
-              <button id="run-cta-button" class="btn btn-primary" type="button">运行示例固件</button>
-              <span>或从固件库载入本地 BIN</span>
+              <svg class="idle-mark" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="26" fill="currentColor"/><circle cx="32" cy="32" r="12" fill="#08090a"/></svg>
+              <strong id="screen-state">等待你的固件</strong><span id="screen-state-hint">打开 BIN，让次元屏亮起来</span>
             </div>
-
-            <div id="touch-overlay" class="touch-overlay" aria-hidden="true">
-              <span id="touch-dot" class="touch-dot"></span>
-              <span id="touch-readout" class="touch-readout">0, 0</span>
-            </div>
-
-            <div id="error-card" class="error-card" role="alert" aria-live="assertive" hidden>
-              <div class="error-head">
-                <svg class="icon error-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M12 4.5l8.5 15h-17z"></path>
-                  <path d="M12 10v4.2M12 17.2h.01"></path>
-                </svg>
-                <strong>运行失败</strong>
-                <button id="error-close" class="btn btn-icon" type="button" aria-label="关闭错误提示"></button>
-              </div>
-              <p id="error-message"></p>
-              <div id="error-actions" class="error-actions"></div>
-            </div>
-
+            <div id="touch-overlay" class="touch-overlay" aria-hidden="true"><span id="touch-dot" class="touch-dot"></span><span id="touch-readout" class="touch-readout">0, 0</span></div>
             <div id="launcher-overlay" class="launcher-overlay" role="dialog" aria-modal="false" aria-labelledby="launcher-title" hidden>
               <div class="launcher-head">
                 <p class="launcher-eyebrow">SDGOODS 启动器 · 模拟</p>
@@ -108,71 +55,49 @@
               <p class="launcher-foot">仅模拟槽分配与 otadata；官方启动器界面由平台镜像提供</p>
             </div>
           </div>
-          <button id="side" class="side-key" type="button" aria-label="按住侧键（GPIO6）" title="侧键 GPIO6" disabled></button>
+          <button id="side" class="side-key" type="button" aria-label="按住右上方侧键" aria-describedby="device-key-hint" title="侧键 · 可短按或长按，也可按住空格" disabled></button>
         </div>
-        <p class="device-hint">点按或拖动屏幕操作；右侧为 GPIO6 侧键。</p>
-      </section>
+        <p class="device-prompt">拖入 BIN，或从左侧打开</p>
+        <p id="device-key-hint" class="sr-only">触摸圆屏；右上银色侧键可短按或长按，也可按住空格。具体功能由固件决定。</p>
+            <div id="error-card" class="error-card" role="alert" aria-live="assertive" hidden>
+              <div class="error-head">
+                <svg class="icon error-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 4.5l8.5 15h-17z"></path>
+                  <path d="M12 10v4.2M12 17.2h.01"></path>
+                </svg>
+                <strong>运行失败</strong>
+                <button id="error-close" class="btn btn-icon" type="button" aria-label="关闭错误提示"></button>
+              </div>
+              <p id="error-message"></p>
+              <div id="error-actions" class="error-actions"></div>
+            </div>
 
-      <section class="panel-column" aria-label="控制面板">
+
+        <footer class="control-bar" role="toolbar" aria-label="设备操作">
+          <button id="launcher" class="btn" type="button" hidden>启动器</button>
+          <button id="restart" class="btn" type="button" title="重启设备，保留设置和进度" disabled>重启</button>
+
+          <button id="screenshot" class="btn" type="button" aria-label="截图" title="保存截图" disabled>截图</button>
+          <button id="record" class="btn" type="button" disabled>录屏</button><button id="fullscreen" class="btn" type="button" title="全屏">全屏</button>
+
+        </footer>
+
+      </section>
+      <section id="workspace-panel" class="panel-column" aria-label="工作面板" hidden>
+        <div id="dock-resize" class="dock-resize" role="separator" tabindex="0" aria-label="调整开发工具尺寸" aria-controls="workspace-panel"></div>
+        <div class="panel-toolbar"><span id="workspace-panel-title">固件</span><div class="dock-actions"><button id="dock-bottom" class="btn btn-icon" type="button" aria-label="停靠下方" title="停靠下方"></button><button id="dock-right" class="btn btn-icon" type="button" aria-label="停靠右侧" title="停靠右侧"></button><button id="dock-max" class="btn btn-icon" type="button" aria-label="最大化或还原面板" title="最大化面板"></button></div><button id="panel-close" class="btn btn-icon btn-ghost" type="button" aria-label="收起工作面板">×</button></div>
         <div id="tabs" class="tabs-host"></div>
         <div id="panel-host" class="panel-host"></div>
       </section>
-
-      <footer class="control-bar" role="toolbar" aria-label="运行控制">
-        <div class="control-group">
-          <button id="launcher" class="btn" type="button" data-icon="layers" hidden>启动器</button>
-          <button id="run" class="btn btn-primary" type="button" data-icon="play">运行</button>
-          <button id="restart" class="btn" type="button" data-icon="restart" disabled>重启</button>
-          <button id="reset" class="btn" type="button" data-icon="trash" disabled>清除数据</button>
-        </div>
-        <div class="control-group audio-controls">
-          <button id="mute" class="btn btn-icon" type="button" aria-label="静音" title="静音"></button>
-          <input id="volume" type="range" min="0" max="100" step="1" value="80" aria-label="音量">
-        </div>
-        <div class="control-group">
-          <button id="screenshot" class="btn btn-icon" type="button" aria-label="截图" title="保存截图" disabled></button>
-          <button id="record" class="btn" type="button" data-icon="record" disabled>录屏</button>
-          <button id="fullscreen" class="btn btn-icon" type="button" aria-label="全屏" title="全屏"></button>
-        </div>
-      </footer>
     </main>
-
+    <div id="settings-extras" hidden><button id="clear-open" class="btn btn-danger" type="button" disabled>清除运行数据</button><button id="setup-open" class="btn" type="button" hidden>配网帮助</button></div>
+    <div id="drop-overlay" class="drop-overlay" hidden><strong>松开，运行这个 BIN</strong><span>整机固件或纯 app 包均可</span></div>
     <input id="file" type="file" accept=".bin,application/octet-stream" hidden>
   </div>
-
-  <div id="onboarding" class="onboarding" hidden>
-    <div class="onboarding-backdrop"></div>
-    <section class="onboarding-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
-      <button id="onboarding-close" class="btn btn-icon onboarding-close" type="button" aria-label="关闭引导"></button>
-      <p class="eyebrow">谷仓次元屏</p>
-      <h2 id="onboarding-title" class="onboarding-title">欢迎使用模拟器</h2>
-      <p class="onboarding-lead">在浏览器中运行 ESP32-S3 次元屏固件。固件只在本机加载与缓存，不会上传到服务器。</p>
-
-      <div class="onboarding-modes">
-        <article class="mode-card">
-          <h3>本机加速</h3>
-          <p>在 x86-64 Linux 或 Windows 的 Ubuntu WSL 中运行原生模拟器，帧率更高、输入延迟更低。状态：<span id="onboarding-native">检测中</span></p>
-        </article>
-        <article class="mode-card">
-          <h3>浏览器</h3>
-          <p>无需安装，直接在网页内运行。性能受浏览器限制，重负载玩法建议使用本机加速。</p>
-        </article>
-      </div>
-
-      <div class="onboarding-actions">
-        <button id="onboarding-sample" class="btn btn-primary" type="button">运行示例固件</button>
-        <button id="onboarding-file" class="btn" type="button">选择本地固件</button>
-        <button id="onboarding-url" class="btn" type="button">使用固件链接</button>
-      </div>
-      <p class="onboarding-note">扬声器在开始运行后启用；麦克风需要在音频面板手动开启，并由浏览器请求授权。</p>
-      <p class="onboarding-note">运行方式、重启和清除数据可以在顶部与底部控制栏调整。</p>
-    </section>
-  </div>
-
-  <noscript>
-    <p style="padding: 24px; text-align: center; color: #f2eee2;">模拟器需要 JavaScript 才能运行，请启用后刷新页面。</p>
-  </noscript>
-
+  <dialog id="clear-dialog" class="confirm-dialog" aria-labelledby="clear-title">
+    <form method="dialog"><h2 id="clear-title">清除这份固件的数据？</h2><p id="clear-description"></p><p>设置和运行进度将恢复到原始固件状态，其他固件不受影响。</p><div class="dialog-actions"><button class="btn" value="cancel" autofocus>保留数据</button><button class="btn btn-danger" value="clear">清除并重启</button></div></form>
+  </dialog>
+  <noscript>请启用 JavaScript 后使用模拟器。</noscript>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

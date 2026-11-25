@@ -324,3 +324,17 @@ test("remove keeps the sample entry protected", async () => {
   assert.equal(library.remove("sample"), false);
   assert.ok(library.list().some((item) => item.kind === "sample"));
 });
+
+
+test("hiding history preserves firmware bytes and opening it restores the record", async () => {
+  const bytes=makeDescribedImage();
+  const library=new FirmwareLibrary({fetchImpl:async()=>{throw Error("offline");}});
+  const entry=await library.addFile({name:"keep.bin",size:bytes.length,arrayBuffer:async()=>bytes.slice().buffer});
+  const before=await library.prepare(entry);
+  assert.equal(library.hideRecent(entry.id),true);
+  assert.equal(library.list().find(item=>item.id===entry.id).recentHidden,true);
+  const after=await library.prepare(entry.id);
+  assert.equal(after.flashKey,before.flashKey);
+  assert.deepEqual(new Uint8Array(after.firmware),new Uint8Array(before.firmware));
+  assert.equal(library.list().find(item=>item.id===entry.id).recentHidden,false);
+});

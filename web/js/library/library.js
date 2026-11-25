@@ -150,6 +150,7 @@ function normalizeStoredEntry(raw) {
     project: typeof raw.project === "string" ? raw.project : "",
     source: typeof raw.source === "string" ? raw.source : "",
     lastUsed: Number.isFinite(raw.lastUsed) ? raw.lastUsed : 0,
+    recentHidden: raw.recentHidden === true,
     sha256:
       typeof raw.sha256 === "string" && SHA256_PATTERN.test(raw.sha256)
         ? raw.sha256.toLowerCase()
@@ -340,6 +341,7 @@ export class FirmwareLibrary {
     if (typeof info.version === "string" && info.version) entry.version = info.version;
     if (typeof info.project === "string" && info.project) entry.project = info.project;
     entry.lastUsed = Date.now();
+    entry.recentHidden = false;
   }
 
   #adoptSampleMetadata(entry, metadata) {
@@ -541,8 +543,16 @@ export class FirmwareLibrary {
 
   /**
    * @param {string} id
-   * @returns {boolean} False when the entry is the built-in sample or missing.
+   * @returns {boolean} False when the entry is missing.
    */
+  hideRecent(id) {
+    const entry = this.#find(id);
+    if (!entry) return false;
+    entry.recentHidden = true;
+    this.#persist();
+    return true;
+  }
+
   remove(id) {
     if (id === SAMPLE_ID) return false;
     const index = this.#entries.findIndex((entry) => entry.id === id);

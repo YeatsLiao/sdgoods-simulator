@@ -1,17 +1,18 @@
+import { normalizeSoundPreferences } from "./sound-preferences.js";
+import { SlotController } from "./slot-controller.js";
+import { toArrayBuffer, flatInfo } from "./firmware-info.js";
 import { DeviceSession } from "../device/session.js";
-import { describeFirmware } from "../device/firmware.js";
 import { Renderer } from "../render/renderer.js";
 import { Recorder } from "../render/recorder.js";
 import { AudioEngine } from "../audio/engine.js";
 import { MicCapture } from "../audio/mic.js";
-import { FlashStore } from "../flash/store.js";
-import { isAppPackage, loadPlatformAssets } from "../flash/app-package.js";
-import { buildSlotImage, parseSlotLayout } from "../flash/device-image.js";
-import { OTA_SECTOR_SIZE } from "../flash/otadata.js";
 import {
-  assignSlot, clearSlot, readSlotState, selectSlot, writeSlotState,
-} from "../flash/slots.js";
-import { getFirmware } from "../library/cache.js";
+  DirectStreamPlayer,
+  isDirectPlayable,
+  parseStreamUrl,
+} from "../audio/direct.js";
+import { FlashStore } from "../flash/store.js";
+import { readSlotState } from "../flash/slots.js";
 import { FirmwareLibrary } from "../library/library.js";
 import { createUI } from "../ui/panels.js";
 import { DebugConsole } from "../debug/console.js";
@@ -19,29 +20,21 @@ import { StatsPanel } from "../debug/stats.js";
 import { Inspector } from "../debug/inspector.js";
 import * as macros from "../debug/macros.js";
 import { download } from "../shared/dom.js";
-import { clamp, formatBytes } from "../shared/format.js";
+import { clamp } from "../shared/format.js";
+import { readJson, writeJson } from "../shared/storage.js";
 
 const SIZE = 360;
 const AUTO_SAVE_MS = 20000;
-
-function toArrayBuffer(value) {
-  if (value instanceof ArrayBuffer) return value;
-  if (ArrayBuffer.isView(value)) {
-    return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-  }
-  throw new TypeError("固件数据格式不正确");
-}
-
-function flatInfo(entry, info, size) {
-  const app = info?.app ?? {};
-  return {
-    name: entry?.name ?? "firmware.bin",
-    project: app.project ?? entry?.project ?? "—",
-    version: app.version ?? entry?.version ?? "—",
-    idf: app.idf ?? "—",
-    size: size ?? entry?.size ?? 0,
-  };
-}
+// Audio below this share of real time sounds broken even though it plays.
+const SLOW_AUDIO_RATIO = 0.6;
+// The hint explains a whole run, so it stays up past the toast's own timeout.
+const SLOW_AUDIO_HINT_MS = 9000;
+const REPLAY_LENGTHS = [2, 4, 8, 16];
+const REPLAY_DEFAULT_SECONDS = 4;
+// 串口日志按块到达，一行可能被拆开，留一段尾巴保证流地址能被整行解析。
+const DIRECT_LOG_TAIL = 400;
+// 设备停止送出 I2S 音频超过这个时间，就认为电台已经停了，把声音交还设备。
+const DIRECT_SILENT_MS = 4000;
 
 export class App {
   constructor(root) {
@@ -55,6 +48,8 @@ export class App {
     this.running = false;
     this.hasFrame = false;
     this.setupHintShown = false;
+    this.slowAudioHintShown = false;
+    this.slowAudioHintTimer = 0;
     this.busy = false;
     this.activePointer = undefined;
     this.recorder = null;
@@ -62,11 +57,13 @@ export class App {
     this.micActive = false;
     this.micLevel = 0;
     this.muted = false;
+    this.volume = .8;
     this.dev = false;
     this.flashResolvers = [];
     this.autoSave = 0;
     this.levelsTimer = 0;
     this.lastFlashExport = false;
+    this.slotController = new SlotController(this);
     this.slots = readSlotState();
     this.slotLayout = null;
     this.platformPromise = null;
@@ -82,6 +79,16 @@ export class App {
 
     this.renderer = new Renderer(this.elements.canvas);
     this.audio = new AudioEngine();
+    // Playback strategies were removed from the UI; always start with realtime audio.
+    this.applyReplayPrefs(null);
+    this.direct = new DirectStreamPlayer();
+    this.directFollow = readJson("audioDirect", null)?.follow !== false;
+    this.directSource = "";
+    this.directErrorShown = "";
+    this.logTail = "";
+    this.lastDeviceAudioAt = 0;
+    this.directUnsubscribe = this.direct.onChange((state) => this.onDirectState(state));
+    this.setSoundPreferences(readJson("sound", null), false);
     this.mic = new MicCapture();
     this.flashStore = new FlashStore();
     this.library = new FirmwareLibrary();
@@ -117,13 +124,14 @@ export class App {
     this.mic.on("error", (message) => this.ui.toast?.(message, "error"));
 
     this.bind();
+    this.renderDirect();
     this.renderLibrary();
     await this.loadStatus();
     const query = new URLSearchParams(location.search);
     if (query.get("dev") === "1") this.setDevMode(true);
-    this.ui.onboarding?.show?.();
+
     this.levelsTimer = setInterval(() => this.refreshLevels(), 250);
-    this.ui.setStatus?.("选择一个玩法开始");
+    this.ui.setStatus?.("打开固件即可开始");
   }
 
   async loadStatus() {
@@ -147,15 +155,22 @@ export class App {
     const elements = this.elements;
     this.byId("run")?.addEventListener("click", () => this.runCurrent());
     this.byId("restart")?.addEventListener("click", () => this.restart(false));
-    this.byId("reset")?.addEventListener("click", () => this.restart(true));
+    this.byId("clear-open")?.addEventListener("click", () => this.restart(true));
     this.byId("screenshot")?.addEventListener("click", () => this.screenshot());
     this.byId("record")?.addEventListener("click", () => this.toggleRecording());
     this.byId("fullscreen")?.addEventListener("click", () => this.fullscreen());
-    this.byId("dev")?.addEventListener("click", () => this.setDevMode(!this.dev));
+    this.byId("dev")?.addEventListener("click", () => { if (!this.ui.toggleTools?.()) this.setDevMode(true); });
+    elements.app.addEventListener("sdg:tools", () => this.setDevMode(true));
     this.byId("mute")?.addEventListener("click", () => this.toggleMute());
-    this.byId("volume")?.addEventListener("input", (event) => this.audio.setVolume(Number(event.target.value) / 100));
+    this.byId("volume")?.addEventListener("input", (event) => {
+      const value = Number(event.target.value) / 100;
+      this.setSoundPreferences({ volume: value, muted: this.muted });
+    });
     this.byId("mic")?.addEventListener("click", () => this.toggleMic());
-    this.elements.mode?.addEventListener("change", () => this.switchMode(this.elements.mode.value));
+    this.elements.mode?.addEventListener("change", () => {
+      if (this.current) this.ui.toast?.("切换运行方式会重新启动当前固件", "info");
+      this.switchMode(this.elements.mode.value);
+    });
 
     const file = this.ui.elements.fileInput ?? this.byId("file");
     file?.addEventListener("change", async () => {
@@ -167,25 +182,32 @@ export class App {
     const host = this.ui.elements.panelHost ?? this.root;
     host.addEventListener("sdg:library", (event) => {
       const { action, entry, url, sha256 } = event.detail ?? {};
-      if (action === "sample") this.runSample();
+      if (action === "file" && event.detail.file) this.addFile(event.detail.file);
+      else if (action === "sample") this.runSample();
       else if (action === "run" && entry) this.runEntry(entry);
       else if (action === "url" && url) this.addUrl(url, sha256);
+      else if (action === "hide-history" && entry) {
+        this.library.hideRecent(entry.id);
+        this.renderLibrary();
+        this.ui.toast?.("已移除最近记录，固件数据和当前运行不受影响", "info");
+      }
       else if (action === "remove" && entry) {
         this.library.remove(entry.id);
-        this.dropSlotsForEntry(entry.id);
+        this.slotController.dropSlotsForEntry(entry.id);
         this.renderLibrary();
       }
     });
 
+    host.addEventListener("sdg:direct", (event) => this.onDirectEvent(event.detail ?? {}));
+
     this.root.addEventListener("sdg:slots", (event) => {
       const { action, slotIndex, entryId } = event.detail ?? {};
-      if (action === "assign") this.installSlot(slotIndex, entryId);
-      else if (action === "launch") this.launchSlot(slotIndex);
-      else if (action === "clear") this.clearSlot(slotIndex);
-      else if (action === "open-launcher") this.openLauncher();
-      else if (action === "close-launcher") this.closeLauncher();
+      if (action === "assign") this.slotController.installSlot(slotIndex, entryId);
+      else if (action === "launch") this.slotController.launchSlot(slotIndex);
+      else if (action === "clear") this.slotController.clearSlot(slotIndex);
+      else if (action === "open-launcher") this.slotController.openLauncher();
+      else if (action === "close-launcher") this.slotController.closeLauncher();
     });
-    this.byId("launcher")?.addEventListener("click", () => this.openLauncher());
 
     const screen = elements.canvas;
     screen.addEventListener("pointerdown", (event) => this.touchStart(event));
@@ -203,6 +225,18 @@ export class App {
       });
       side.addEventListener("lostpointercapture", () => this.key(false));
       side.addEventListener("pointerup", () => this.key(false));
+      side.addEventListener("pointercancel", () => this.key(false));
+      side.addEventListener("keydown", (event) => {
+        if (!["Space", "Enter"].includes(event.code)) return;
+        event.preventDefault();
+        if (!event.repeat) this.key(true);
+      });
+      side.addEventListener("keyup", (event) => {
+        if (!["Space", "Enter"].includes(event.code)) return;
+        event.preventDefault();
+        this.key(false);
+      });
+      side.addEventListener("blur", () => this.key(false));
     }
 
     window.addEventListener("keydown", (event) => this.keyboard(event, true));
@@ -223,275 +257,7 @@ export class App {
 
   renderLibrary() {
     this.ui.library?.render?.(this.library.list());
-    this.renderSlots();
-  }
-
-  ensureSlotLayout() {
-    this.platformPromise ??= loadPlatformAssets()
-      .then((assets) => {
-        const layout = parseSlotLayout(assets.partitionTable);
-        this.slotLayout = layout;
-        this.renderSlots();
-        return { ...assets, layout };
-      })
-      .catch((error) => {
-        this.platformPromise = null;
-        throw error;
-      });
-    return this.platformPromise;
-  }
-
-  slotView() {
-    const layout = this.slotLayout?.slots ?? [];
-    const byIndex = new Map(layout.map((slot) => [slot.slotIndex, slot]));
-    const count = layout.length || this.slots.slots.length;
-    const slots = [];
-    for (let index = 0; index < count; index++) {
-      const partition = byIndex.get(index);
-      slots.push({
-        slotIndex: index,
-        offset: partition?.offset ?? null,
-        size: partition?.size ?? null,
-        app: this.slots.slots[index] ?? null,
-      });
-    }
-    return {
-      slots,
-      selected: this.slots.selected,
-      runningSlot: this.session ? this.current?.slotIndex ?? null : null,
-      entries: this.library.list(),
-      busy: this.busy,
-    };
-  }
-
-  renderSlots() {
-    if (!this.ui?.slots) return;
-    const view = this.slotView();
-    this.ui.slots.render?.(view);
-    if (this.ui.launcher?.visible) this.ui.launcher.render?.(view);
-  }
-
-  async openLauncher() {
-    if (this.busy) return;
-    if (this.session) {
-      await this.saveBeforeStop();
-      this.stopSession();
-    }
-    this.renderSlots();
-    this.ui.launcher?.show?.(this.slotView());
-    this.ui.setStatus?.("启动器：从 OTA 槽启动应用");
-  }
-
-  closeLauncher() {
-    this.ui.launcher?.hide?.();
-    this.ui.setStatus?.(this.session ? "运行中" : "选择一个玩法开始");
-  }
-
-  async dropSlotsForEntry(entryId) {
-    let changed = false;
-    for (let index = 0; index < this.slots.slots.length; index++) {
-      if (this.slots.slots[index]?.entryId === entryId) {
-        this.slots = clearSlot(this.slots, index);
-        changed = true;
-      }
-    }
-    if (!changed) return;
-    writeSlotState(this.slots);
-    this.renderSlots();
-    this.ui.toast?.("固件已移除，引用它的应用槽已清空", "warning");
-  }
-
-  async installSlot(slotIndex, entryId) {
-    if (this.busy) return;
-    if (!entryId) {
-      this.ui.toast?.("请先选择一个固件条目", "warning");
-      return;
-    }
-    this.busy = true;
-    this.ui.showError?.(null);
-    this.ui.library?.setBusy?.(true);
-    this.renderSlots();
-    try {
-      const { layout } = await this.ensureSlotLayout();
-      const slot = layout.slots.find((item) => item.slotIndex === slotIndex);
-      if (!slot) throw new Error(`平台分区表没有 OTA${slotIndex} 槽`);
-      const raw = await this.library.raw(entryId);
-      const bytes = new Uint8Array(raw.firmware);
-      if (!isAppPackage(bytes)) {
-        throw new Error("整机镜像不能装入 OTA 槽，请选择纯 app 包（无分区表、描述符在 0x10000 之前）");
-      }
-      if (bytes.byteLength > slot.size) {
-        throw new Error(
-          `应用 ${formatBytes(bytes.byteLength)} 超过 OTA${slotIndex} 槽容量 ${formatBytes(slot.size)}`,
-        );
-      }
-      const app = raw.info?.app ?? {};
-      this.slots = assignSlot(this.slots, slotIndex, {
-        entryId: raw.entry.id,
-        sha256: raw.sha256,
-        name: raw.entry.name,
-        version: (typeof app.version === "string" && app.version) || raw.entry.version || "",
-        project: (typeof app.project === "string" && app.project) || raw.entry.project || "",
-        size: bytes.byteLength,
-      });
-      writeSlotState(this.slots);
-      this.renderLibrary();
-      this.ui.toast?.(`已装入 OTA${slotIndex}：${raw.entry.name}`, "success");
-      this.ui.setStatus?.(`OTA${slotIndex} 已装入 ${raw.entry.name}`);
-    } catch (error) {
-      this.fail(error.message || String(error));
-    } finally {
-      this.busy = false;
-      this.ui.library?.setBusy?.(false);
-      this.renderSlots();
-    }
-  }
-
-  async resolveSlotApp(assignment, slotIndex) {
-    let firmware = assignment.sha256
-      ? await getFirmware(assignment.sha256).catch(() => null)
-      : null;
-    let entry = null;
-    let info = null;
-    let sha = assignment.sha256;
-    if (!firmware && assignment.entryId) {
-      const raw = await this.library.raw(assignment.entryId).catch(() => null);
-      if (raw) {
-        firmware = raw.firmware;
-        entry = raw.entry;
-        info = raw.info;
-        sha = raw.sha256;
-      }
-    }
-    if (!firmware) {
-      throw new Error(`OTA${slotIndex} 的固件缓存已丢失（${assignment.name}），请重新装入`);
-    }
-    if (sha && sha !== assignment.sha256) {
-      throw new Error(`OTA${slotIndex} 的固件与槽记录不一致，请重新装入`);
-    }
-    info ??= describeFirmware(firmware);
-    entry ??= {
-      id: assignment.entryId,
-      name: assignment.name,
-      version: assignment.version,
-      project: assignment.project,
-      kind: "file",
-      size: assignment.size,
-    };
-    return { entry, firmware, info, sha256: assignment.sha256 };
-  }
-
-  /** Slot boots re-stamp otadata on the restored snapshot (see DeviceSession). */
-  otadataPatch(built) {
-    const size = Math.max(OTA_SECTOR_SIZE, built.otadata.size);
-    const data = new Uint8Array(size).fill(0xff);
-    data.set(built.bytes.subarray(built.otadata.offset, built.otadata.offset + OTA_SECTOR_SIZE));
-    return { offset: built.otadata.offset, data };
-  }
-
-  async launchSlot(slotIndex) {
-    if (this.busy) return;
-    const assignment = this.slots.slots[slotIndex];
-    if (!assignment) {
-      this.ui.toast?.(`OTA${slotIndex} 是空槽`, "warning");
-      return;
-    }
-    this.busy = true;
-    this.ui.showError?.(null);
-    this.ui.library?.setBusy?.(true);
-    this.ui.onboarding?.hide?.();
-    try {
-      const { bootloader, partitionTable, seed, layout } = await this.ensureSlotLayout();
-      const slot = layout.slots.find((item) => item.slotIndex === slotIndex);
-      if (!slot) throw new Error(`平台分区表没有 OTA${slotIndex} 槽`);
-
-      const selectedApp = await this.resolveSlotApp(assignment, slotIndex);
-      const apps = [{ slotIndex, bytes: new Uint8Array(selectedApp.firmware) }];
-      for (let index = 0; index < this.slots.slots.length; index++) {
-        if (index === slotIndex) continue;
-        const item = this.slots.slots[index];
-        if (!item) continue;
-        const raw = await this.resolveSlotApp(item, index);
-        apps.push({ slotIndex: index, bytes: new Uint8Array(raw.firmware) });
-      }
-
-      const built = buildSlotImage({ bootloader, partitionTable, seed, apps, selected: slotIndex });
-      const firmware = toArrayBuffer(built.bytes);
-      const flashKey = `slot-${slotIndex}-${assignment.sha256}`;
-      this.ui.setStatus?.(`正在从 OTA${slotIndex} 启动 ${assignment.name}`);
-
-      if (this.session) {
-        await this.saveBeforeStop();
-        this.stopSession();
-      }
-      const flash = this.mode === "wasm"
-        ? await this.flashStore.load(flashKey, firmware).catch(() => null)
-        : null;
-      const flashPatch = this.otadataPatch(built);
-
-      this.current = {
-        entry: selectedApp.entry,
-        firmware,
-        info: selectedApp.info,
-        flashKey,
-        slotIndex,
-      };
-      const info = this.firmwareInfo();
-      this.ui.setFirmwareInfo?.(info);
-      this.inspector.clearFault();
-      this.inspector.setMode(this.mode);
-      this.inspector.setFirmware(info);
-      this.inspector.setPartitions(describeFirmware(firmware).partitions);
-      this.console.clear();
-      this.renderer.reset();
-      this.hasFrame = false;
-      this.setupHintShown = false;
-      this.running = true;
-      this.ui.setRunning?.(true);
-      this.ui.launcher?.hide?.();
-      this.ui.setStatus?.(this.mode === "native" ? "正在启动本机模拟器…" : "正在启动浏览器模拟器…");
-      try {
-        await this.audio.init();
-        this.audio.setVolume(0.8);
-      } catch (error) {
-        this.ui.toast?.(`音频未启用：${error.message || error}`, "error");
-      }
-      this.session = new DeviceSession();
-      this.wireSession(this.session);
-      this.session.boot({
-        mode: this.mode,
-        firmware: this.current.firmware,
-        flash,
-        flashPatch,
-        name: `${selectedApp.entry.name} · OTA${slotIndex}`,
-        flashKey,
-        preserveFlash: true,
-      });
-      this.startAutoSave();
-      this.slots = selectSlot(this.slots, slotIndex);
-      writeSlotState(this.slots);
-      this.renderSlots();
-    } catch (error) {
-      this.fail(error.message || String(error));
-      this.ui.launcher?.show?.(this.slotView());
-    } finally {
-      this.busy = false;
-      this.ui.library?.setBusy?.(false);
-      this.renderSlots();
-    }
-  }
-
-  async clearSlot(slotIndex) {
-    if (this.busy) return;
-    if (!this.slots.slots[slotIndex]) return;
-    this.slots = clearSlot(this.slots, slotIndex);
-    writeSlotState(this.slots);
-    if (this.current?.slotIndex === slotIndex) {
-      await this.openLauncher();
-    } else {
-      this.renderSlots();
-    }
-    this.ui.toast?.(`已清空 OTA${slotIndex}`, "info");
+    this.slotController.renderSlots();
   }
 
   firmwareInfo() {
@@ -504,35 +270,59 @@ export class App {
   }
 
   async runSample() {
+    if (this.busy || this.sourceLoading) return;
+    this.sourceLoading = true;
+    this.ui.setPhase?.("preparing");
+    this.ui.library?.setBusy?.(true);
     try {
       this.ui.setStatus?.("正在读取示例固件…");
       const entry = await this.library.loadSample();
       this.renderLibrary();
+      this.sourceLoading = false;
       await this.runEntry(entry);
     } catch (error) {
       this.fail(error.message || String(error));
+    } finally {
+      this.sourceLoading = false;
+      this.ui.library?.setBusy?.(false);
     }
   }
 
   async addFile(file) {
+    if (this.busy || this.sourceLoading) return;
+    this.sourceLoading = true;
+    this.ui.setPhase?.("preparing");
+    this.ui.library?.setBusy?.(true);
     try {
       this.ui.setStatus?.(`正在读取 ${file.name}`);
       const entry = await this.library.addFile(file);
       this.renderLibrary();
+      this.sourceLoading = false;
       await this.runEntry(entry);
     } catch (error) {
       this.fail(error.message || String(error));
+    } finally {
+      this.sourceLoading = false;
+      this.ui.library?.setBusy?.(false);
     }
   }
 
   async addUrl(url, sha256) {
+    if (this.busy || this.sourceLoading) return;
+    this.sourceLoading = true;
+    this.ui.setPhase?.("preparing");
+    this.ui.library?.setBusy?.(true);
     try {
       this.ui.setStatus?.("正在下载固件…");
       const entry = await this.library.addUrl(url, { sha256 });
       this.renderLibrary();
+      this.sourceLoading = false;
       await this.runEntry(entry);
     } catch (error) {
       this.fail(error.message || String(error));
+    } finally {
+      this.sourceLoading = false;
+      this.ui.library?.setBusy?.(false);
     }
   }
 
@@ -543,11 +333,11 @@ export class App {
   }
 
   async runEntry(entryOrId) {
-    if (this.busy) return;
+    if (this.busy || this.sourceLoading) return;
+    this.ui.setPhase?.("preparing");
     this.busy = true;
     this.ui.showError?.(null);
     this.ui.library?.setBusy?.(true);
-    this.ui.onboarding?.hide?.();
     try {
       const prepared = await this.library.prepare(entryOrId);
       const firmware = toArrayBuffer(prepared.firmware);
@@ -562,6 +352,7 @@ export class App {
         ? await this.flashStore.load(flashKey, firmware).catch(() => null)
         : null;
       this.current = { entry: prepared.entry, firmware, info: prepared.info, flashKey, slotIndex: null };
+      this.ui.library?.setCurrent?.(prepared.entry.id);
       const info = flatInfo(prepared.entry, prepared.info, firmware.byteLength);
       this.ui.setFirmwareInfo?.(info);
       this.inspector.clearFault();
@@ -571,15 +362,17 @@ export class App {
       this.console.clear();
       this.renderer.reset();
       this.hasFrame = false;
-      this.setupHintShown = false;
+      this.beginRunHintState();
       this.running = true;
       this.ui.setRunning?.(true);
+      this.ui.setPhase?.("starting");
       this.ui.launcher?.hide?.();
-      this.renderSlots();
+      this.slotController.renderSlots();
       this.ui.setStatus?.(this.mode === "native" ? "正在启动本机模拟器…" : "正在启动浏览器模拟器…");
       try {
         await this.audio.init();
-        this.audio.setVolume(0.8);
+        this.audio.setVolume(this.volume);
+        this.audio.setMuted(this.muted);
       } catch (error) {
         this.ui.toast?.(`音频未启用：${error.message || error}`, "error");
       }
@@ -605,26 +398,34 @@ export class App {
   wireSession(session) {
     session.on("frame", ({ packed }) => {
       this.renderer.draw(new Uint16Array(packed));
+      if (!this.hasFrame) {
+        this.ui.setPhase?.("running");
+        this.ui.setStatus?.("运行中");
+      }
       this.hasFrame = true;
     });
     session.on("audio", ({ pcm, format }) => {
+      this.lastDeviceAudioAt = Date.now();
       this.audio.play(new Uint8Array(pcm), format);
     });
     session.on("audioformat", ({ format }) => {
-      this.ui.setStatus?.(format.receive
-        ? `麦克风 ${format.rate} Hz / ${format.bits} bit`
-        : `扬声器 ${format.rate} Hz / ${format.bits} bit`);
+      if (!format.receive) this.ui.setAudioFormat?.(format);
     });
     session.on("log", (text) => {
       this.console.append(text);
       this.maybeSetupHint(text);
+      this.maybeFollowStream(text);
     });
     session.on("status", ({ status }) => this.ui.setStatus?.(status));
     session.on("booted", (event) => {
       this.running = true;
+      // A fresh boot starts a new measurement window for both hints.
+      this.setupHintShown = false;
+      this.slowAudioHintShown = false;
       this.ui.setRunning?.(true);
+      this.ui.setPhase?.(this.hasFrame ? "running" : "waiting");
       this.ui.showError?.(null);
-      this.ui.setStatus?.("运行中");
+      this.ui.setStatus?.(this.hasFrame ? "运行中" : "固件已启动，等待首帧");
       const info = this.firmwareInfo();
       if (info) {
         this.ui.setFirmwareInfo?.(info);
@@ -647,7 +448,8 @@ export class App {
         ...stats,
         drawMs: this.renderer.stats?.drawMs,
         dropped: this.renderer.stats?.dropped,
-        audioQueue: this.audio.levels.outQueued,
+        audioQueue: this.audio.levels.queueMs,
+        audioArrival: this.audio.levels.audioRatio,
         audioUnderruns: this.audio.levels.underruns,
       });
     });
@@ -661,7 +463,7 @@ export class App {
     if (this.setupHintShown) return;
     if (!/enter setup mode|AP started|http server up/i.test(text)) return;
     this.setupHintShown = true;
-    this.ui.toast?.("设备已进入配网：Wi-Fi 选 myssid，密码 mypassword", "info");
+    this.ui.showSetupHelp?.();
   }
 
   startAutoSave() {
@@ -699,6 +501,8 @@ export class App {
   }
 
   async restart(clearFlash) {
+    if (this.busy || this.sourceLoading) return;
+    if (clearFlash && !await this.ui.confirmClear?.(this.current?.entry?.name ?? "当前固件")) return;
     if (!this.session || !this.current) {
       this.runCurrent();
       return;
@@ -706,6 +510,11 @@ export class App {
     if (clearFlash) {
       await this.flashStore.clear(this.current.flashKey).catch(() => {});
     }
+    // A restart is a new run: without `booted` after it (native keeps the
+    // session and only reports status), the hint must be able to fire again.
+    this.hasFrame = false;
+    this.ui.setPhase?.("starting");
+    this.beginRunHintState();
     this.renderer.reset();
     this.console.append(clearFlash ? "— 恢复出厂，重新启动 —" : "— 重启，保留数据 —");
     this.session.restart({ clearFlash });
@@ -721,10 +530,14 @@ export class App {
     await this.saveBeforeStop();
     this.stopSession();
     const firmware = this.current.firmware;
+    // This path boots without a preceding run reset, so the hint state is
+    // cleared here; other entries reach it through `booted`.
+    this.beginRunHintState();
     this.session = new DeviceSession();
     this.wireSession(this.session);
     this.running = true;
     this.ui.setRunning?.(true);
+    this.ui.setPhase?.("starting");
     this.session.boot({
       mode: "wasm",
       firmware,
@@ -761,6 +574,7 @@ export class App {
   }
 
   switchMode(mode) {
+    if (this.busy || this.sourceLoading) { this.ui.setMode?.(this.mode); return; }
     if (mode === "native" && !this.nativeAvailable) {
       this.ui.toast?.("本机加速不可用，请使用浏览器模式", "error");
       this.ui.setMode?.("wasm");
@@ -774,7 +588,7 @@ export class App {
   replayCurrent() {
     if (!this.current) return;
     if (this.current.slotIndex !== null && this.current.slotIndex !== undefined) {
-      this.launchSlot(this.current.slotIndex);
+      this.slotController.launchSlot(this.current.slotIndex);
     } else {
       this.runEntry(this.current.entry);
     }
@@ -819,14 +633,22 @@ export class App {
   }
 
   key(down) {
+    this.elements?.side?.classList.toggle("is-active", Boolean(down));
     this.session?.key(down);
     this.macroRecorder.recordKey(down);
   }
 
   keyboard(event, down) {
-    if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return;
+    if (!down && this.keyboardSideDown && ["Space", "Enter"].includes(event.code)) {
+      this.keyboardSideDown = false;
+      this.key(false);
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey || document.querySelector("dialog[open]")) return;
+    if (event.target?.closest?.("button, input, textarea, select, summary, a, [contenteditable=true]")) return;
     if (event.code === "Space" || event.code === "Enter") {
       event.preventDefault();
+      this.keyboardSideDown = down;
       this.key(down);
     } else if (down && event.key.toLowerCase() === "r") {
       this.restart(false);
@@ -896,10 +718,22 @@ export class App {
     target.requestFullscreen?.().catch(() => {});
   }
 
+  setSoundPreferences(value, persist = true) {
+    const prefs = normalizeSoundPreferences(value);
+    this.volume = prefs.volume;
+    this.muted = prefs.muted;
+    this.audio.setVolume(prefs.volume);
+    this.audio.setMuted(prefs.muted);
+    this.direct?.setVolume(prefs.volume);
+    this.direct?.setMuted(prefs.muted);
+    this.ui.setVolume?.(prefs.volume);
+    this.ui.setMuted?.(prefs.muted);
+    if (persist) writeJson("sound", prefs);
+    return prefs;
+  }
+
   toggleMute() {
-    this.muted = !this.muted;
-    this.audio.setMuted(this.muted);
-    this.ui.setMuted?.(this.muted);
+    this.setSoundPreferences({ volume: this.volume, muted: !this.muted });
   }
 
   async toggleMic(force) {
@@ -922,10 +756,258 @@ export class App {
 
   refreshLevels() {
     const levels = this.audio.levels;
-    this.ui.setAudioLevels?.({ out: levels.outRms, in: this.micLevel });
+    this.ui.setDirectState?.(this.directView());
+    // 设备不再往外送音频（退出电台、暂停、关机）时把声音交还设备，别让网页独自响。
+    if (this.direct.active && this.directSource === "follow"
+      && Date.now() - this.lastDeviceAudioAt > DIRECT_SILENT_MS) {
+      this.stopDirect("设备已停止输出，连续收听结束");
+    }
+    this.ui.setAudioLevels?.({
+      out: levels.outRms,
+      in: this.micLevel,
+      makeup: levels.makeup,
+      arrival: levels.audioRatio,
+      underruns: levels.underruns,
+      queueMs: levels.queueMs,
+      prerollMs: levels.prerollMs,
+      dropped: levels.dropped,
+      external: levels.external,
+      capture: levels.capture,
+      replay: levels.replay,
+    });
+    this.maybeSlowAudioHint(levels.audioRatio);
+  }
+
+  /**
+   * 新会话默认实时互动；保留已保存的连续回放偏好。分段回放供延迟不敏感的声音使用。
+   * @param {{auto?: boolean, seconds?: number}|null} stored
+   * @returns {{enabled: boolean, target: number}}
+   */
+  applyReplayPrefs(stored) {
+    const seconds = REPLAY_LENGTHS.includes(Number(stored?.seconds))
+      ? Number(stored.seconds)
+      : REPLAY_DEFAULT_SECONDS;
+    const prefs = this.audio.setAutoReplay({ enabled: stored?.auto === true, target: seconds });
+    this.ui.setReplayPrefs?.(prefs);
+    return prefs;
+  }
+
+  saveReplayPrefs() {
+    const prefs = this.audio.autoReplay;
+    writeJson("audioReplay", { auto: prefs.enabled, seconds: prefs.target });
+    this.ui.setReplayPrefs?.(prefs);
+    return prefs;
+  }
+
+  /** @param {boolean} enabled */
+  setAutoReplay(enabled) {
+    this.audio.setAutoReplay({ enabled });
+    const prefs = this.saveReplayPrefs();
+    this.ui.toast?.(
+      prefs.enabled
+        ? `自动连续回放已开启：每攒满 ${prefs.target} 秒原速连播一段`
+        : "已切回实时播放：到达率不足时会断续",
+      "info",
+    );
+    return prefs;
+  }
+
+  /** @param {number} seconds 每段时长 */
+  setReplayLength(seconds) {
+    this.audio.setAutoReplay({ target: seconds });
+    const prefs = this.saveReplayPrefs();
+    this.ui.toast?.(`每段连续回放 ${prefs.target} 秒`, "info");
+    return prefs;
+  }
+
+  /**
+   * 连续回放：缓存中点击立即播放已攒下的部分；空闲时点击开始缓存一段。
+   * 自动模式下攒满与续缓存都由引擎完成，这里只负责手动触发与提示。
+   */
+  async toggleCapture() {
+    if (this.audio.capture.active) {
+      const seconds = this.audio.playCapture();
+      this.ui.setCaptureActive?.(this.audio.capture.active);
+      if (seconds > 0) this.ui.toast?.(`连续回放 ${seconds.toFixed(1)} 秒`, "info");
+      else this.ui.toast?.("还没缓存到音频，等设备送出声音后再点", "error");
+      return;
+    }
+    const started = await this.audio.startCapture(this.audio.autoReplay.target);
+    this.ui.setCaptureActive?.(started);
+  }
+
+  /**
+   * 「连续收听」区块的事件入口：跟随开关、停止、手动地址。电台不由面板列，
+   * 而是跟着设备串口里报出来的那一路流地址。
+   * @param {{action?: string, url?: string, enabled?: boolean}} detail
+   */
+  onDirectEvent(detail) {
+    if (detail.action === "follow") this.setDirectFollow(detail.enabled);
+    else if (detail.action === "open") this.playDirect({ url: detail.url, source: "manual" });
+    else if (detail.action === "stop") this.stopDirect("已停止连续收听，交还设备音频");
+  }
+
+  /** @returns {object} 面板要显示的直连状态，含跟随开关与来源 */
+  directView() {
+    return { ...this.direct.state, following: this.directFollow, source: this.directSource };
+  }
+
+  renderDirect() {
+    this.ui.setDirectState?.(this.directView());
+  }
+
+  /** @param {boolean} enabled 关掉时只停掉正在播的直连流，不影响设备音频 */
+  setDirectFollow(enabled) {
+    this.directFollow = Boolean(enabled);
+    writeJson("audioDirect", { follow: this.directFollow });
+    if (!this.directFollow && this.direct.active && this.directSource === "follow") {
+      this.stopDirect("跟随已关闭，交还设备音频");
+    }
+    this.renderDirect();
+    this.ui.toast?.(
+      this.directFollow ? "已开启跟随设备电台：设备播哪一路，网页就接哪一路" : "已关闭跟随，只听设备自己算出的声音",
+      "info",
+    );
+    return this.directFollow;
+  }
+
+  /**
+   * 设备开流时串口会打出 `net: connected, streaming: <url>`。日志按块到达，一行可能
+   * 被拆成两块，所以留一小段尾巴再解析。
+   * @param {string} text
+   */
+  maybeFollowStream(text) {
+    if (!this.directFollow) return "";
+    const chunk = `${this.logTail}${String(text ?? "")}`;
+    this.logTail = chunk.slice(-DIRECT_LOG_TAIL);
+    const url = parseStreamUrl(chunk);
+    if (!url) return "";
+    if (url === this.direct.station?.url) return "";
+    if (!isDirectPlayable(url)) {
+      this.ui.toast?.(`设备切到了 HLS/DASH 地址，网页接不了，仍用设备音频`, "info");
+      return "";
+    }
+    this.playDirect({ url, source: "follow" });
+    return url;
+  }
+
+  /**
+   * 播一路浏览器直连的流，并把输出所有权从设备侧接过来。
+   * @param {{url: string, source?: string}} detail
+   */
+  async playDirect(detail) {
+    const url = String(detail.url || "").trim();
+    if (!url) {
+      this.ui.toast?.("请先填流地址", "error");
+      return false;
+    }
+    const started = await this.direct.play({ url });
+    if (!started) {
+      // 已被更新的电台取代：新一路自己会接管输出，这里不该报错也不该交还设备。
+      if (this.direct.station?.url !== url) return false;
+      // 取流失败就把输出交还设备，不能让面板停在「暂停」却什么都听不到。
+      this.audio.setExternalAudio(false);
+      this.directSource = "";
+      this.renderDirect();
+      this.ui.toast?.(this.direct.state.error || "无法播放该地址", "error");
+      return false;
+    }
+    this.directSource = detail.source === "manual" ? "manual" : "follow";
+    this.lastDeviceAudioAt = Date.now();
+    this.audio.setExternalAudio(true);
+    this.applyDirectVolume();
+    this.renderDirect();
+    this.ui.toast?.(`连续收听：${this.direct.station?.name ?? url}`, "info");
+    return true;
+  }
+
+  /** @param {string} [message] 交还设备音频时给用户的说明 */
+  stopDirect(message = "已停止连续收听") {
+    if (!this.direct.active) return;
+    this.direct.stop();
+    this.directSource = "";
+    this.audio.setExternalAudio(false);
+    this.renderDirect();
+    if (message) this.ui.toast?.(message, "info");
+  }
+
+  /**
+   * 直连播放的异步状态变化（缓冲好了、取流断了）。取流失败时回到设备音频。
+   * @param {{error?: string, active?: boolean, playing?: boolean}} state
+   */
+  onDirectState(state) {
+    this.ui.setDirectState?.({ ...state, following: this.directFollow, source: this.directSource });
+    if (!state.error) {
+      this.directErrorShown = "";
+      return;
+    }
+    if (!state.active || state.error === this.directErrorShown) return;
+    this.directErrorShown = state.error;
+    this.stopDirect(`${state.error}，已交还设备音频`);
+  }
+
+  applyDirectVolume() {
+    const value = Number(this.byId("volume")?.value);
+    this.direct.setVolume(Number.isFinite(value) ? value / 100 : 1);
+    this.direct.setMuted(this.muted);
+  }
+
+  /**
+   * Reset the once-per-run hint state and retire the previous hint toast, so a
+   * retained one cannot swallow the next run's message.
+   */
+  beginRunHintState() {
+    this.setupHintShown = false;
+    this.slowAudioHintShown = false;
+    clearTimeout(this.slowAudioHintTimer);
+    this.clearSlowAudioHintToast();
+  }
+
+  /**
+   * The emulator cannot always feed the speaker in real time; say so once per
+   * run so a quiet-but-working radio stream is not read as broken audio.
+   * @param {number|null} ratio seconds of audio that arrived per second of wall time
+   * @returns {HTMLElement|null} the hint toast, or null when nothing was shown
+   */
+  maybeSlowAudioHint(ratio) {
+    if (this.slowAudioHintShown || !this.running) return null;
+    if (this.audio.externalAudio) return null;
+    if (!Number.isFinite(ratio) || ratio >= SLOW_AUDIO_RATIO || ratio <= 0) return null;
+    this.slowAudioHintShown = true;
+    const node = this.ui.toast?.(
+      "模拟速度不足，声音可能断续。可尝试本机加速运行。",
+      "info",
+    );
+    if (!node) return null;
+    // Keep it readable, then retire it: a retained toast would swallow the hint
+    // on the next run.
+    node.dataset.slowAudio = "1";
+    clearTimeout(this.slowAudioHintTimer);
+    this.slowAudioHintTimer = setTimeout(() => this.clearSlowAudioHintToast(), SLOW_AUDIO_HINT_MS);
+    return node;
+  }
+
+  // The hint explains a whole run, so it is retired explicitly instead of
+  // staying up indefinitely like the error toasts.
+  slowAudioHintNodes() {
+    const host = this.ui.elements?.toastHost;
+    if (!host) return [];
+    // A toast that is fading out is already detached from the host but keeps its
+    // marker, so both lists are searched before removing.
+    return [...host.children, ...host.querySelectorAll(".toast")].filter(
+      (node) => node.dataset?.slowAudio === "1",
+    );
+  }
+
+  clearSlowAudioHintToast() {
+    clearTimeout(this.slowAudioHintTimer);
+    this.slowAudioHintTimer = 0;
+    for (const node of this.slowAudioHintNodes()) node.remove();
   }
 
   fail(message) {
+    this.ui.setPhase?.(this.hasFrame ? "running" : "error");
+    this.ui.setStatus?.("操作未完成，请查看提示");
     const actions = this.mode === "native" ? [{
       label: "切换浏览器模式",
       onClick: () => {
@@ -934,6 +1016,7 @@ export class App {
         this.replayCurrent();
       },
     }] : [];
+    actions.push({ label: "重新打开固件", onClick: () => this.ui.showPanel?.("library") });
     if (this.ui.showError) this.ui.showError(message, actions);
     else this.ui.setStatus?.(message);
     this.ui.toast?.(message, "error");
