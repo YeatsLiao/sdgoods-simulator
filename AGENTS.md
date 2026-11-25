@@ -1,6 +1,8 @@
-# SDGOODS 次元屏模拟器开发规范
+# sdgoods-simulator — 本对话 Agent 约定
 
-本文件适用于 `sdgoods-simulator`。项目目标是在浏览器里运行 ESP32-S3 次元屏整机固件与官方纯 app 包，并提供接近真机的调试与体验能力。先读 `README.md`、`docs/ARCHITECTURE.md` 和 `docs/PROTOCOL.md`。
+浏览器内运行次元屏固件与纯 app 包。**本线程以本文件为准**；细节见 `README.md`、`docs/ARCHITECTURE.md`、`docs/PROTOCOL.md`。
+
+**启动**：`start.cmd` 或 `python server/serve.py` → `http://127.0.0.1:8765/`
 
 ## 1. 结构与技术基线
 
@@ -22,7 +24,7 @@
   - `docs/` 架构、协议、产品方案
 - 市场 API 接入暂缓；不要把市场请求写进当前版本。`library` 的 `market` 类型只是占位。
 - 本地纯 app 包（无分区表、描述符在 0x10000 之前）由 `web/js/flash/app-package.js` 用 `web/platform/` 的官方引导层拼成 factory 调试镜像；平台引导层只从官方 `SDGOODS-ESP32S3/platform/prebuilt/` 同步，不手改。
-- 拼装时若 NVS 分区为空，会写入 `web/assets/nvs-seed.bin`（`myssid`／`mypassword`，覆盖 `radio`、`bmb_net`、`wifi` 命名空间，并把 `sdg_cc` 音量预置为 70），纯 app 包和整机镜像都适用。已有 NVS 数据不覆盖。
+- 拼装时若名称为 `nvs` 的 data/nvs 分区为空，会写入 `web/assets/nvs-seed.bin`（`myssid`／`mypassword`，覆盖 `radio`、`bmb_net`、`wifi` 命名空间，并把 `sdg_cc` 音量预置为 70），纯 app 包和整机镜像都适用。已有 NVS 数据不覆盖。
 - 多应用模式由 `web/js/flash/device-image.js`＋`otadata.js`＋`slots.js` 模拟，当前是内部能力：主界面只保留单应用运行，槽/启动器入口默认隐藏。官方 launcher 需要官方初始整机固件，拿到后直接按整机镜像加载，不要另造官方 UI。
 - 网络验证使用 ESP-EMU 的虚拟 Wi-Fi `myssid` / `mypassword`；本机经 `--net user`，浏览器经 `server/relay.py` 的 `esp-emu-relay` 兼容中继（`/relay/tcp`、`/relay/udp`、`/relay/dns`）。浏览器端不依赖设备 192.168.4.1 配网页面。
 
@@ -31,6 +33,7 @@
 - 启动：双击 `start.cmd` 或 `python server/serve.py`，默认 `http://127.0.0.1:8765/`。
 - 本机加速：x86-64 Linux 直接运行；Windows 需要 Ubuntu WSL。首次运行会下载原生包。
 - 单元测试：`node --test tests/*.test.js` 或 `tools/test.cmd`。
+- 主机侧行为改动要补单测；无法在浏览器测试里驱动的本机逻辑（模拟时钟、实时倍率、复位回退）用 `python tools/offline_realtime_check.py` 喂合成协同仿真帧验证，改 `_handle_frame`/`_stats_loop` 要同步更新它。
 - 手动验收使用 8766 及更高端口；不要终止 8765 上可能存在的旧会话。
 - 修改后至少验证：
   1. 两种模式都能启动示例固件并出画面。
@@ -58,11 +61,8 @@
 
 ## 4. 音频
 
-- 扬声器：16-bit PCM，采样率随 I2S 报文（16/48 kHz 等），在 `engine.js` 重采样到 AudioContext；网络音频等低电平流在 `worklet.js` 做 3× 补偿并限幅。
-- 麦克风：16000 Hz、32-bit、1 通道、小端；16-bit 样本左移 16 位。
-- 音频播放走 AudioWorklet；不要用 `ScriptProcessorNode` 作为主路径。
-- 麦克风默认关闭，使用时才请求权限；回声消除/降噪/自动增益默认关闭，提供诊断电平。
-- 音量、静音、PA 使能状态要与 UI 一致；音频缓冲欠载必须计数。
+- 代码在 `web/js/audio/`；主路径 Worklet + `AudioEngine`，电台断续多为 ESP-EMU 算力上限，先查欠载率而非误判解码失败
+- 连续收听 / 连续回放 / 响度与电台 URL 解析：**必读** `docs/AGENTS_AUDIO.md`（仅改音频或排查声音问题时加载）
 
 ## 5. Flash 与数据
 
@@ -89,3 +89,18 @@
 - 新增能力同步更新 `README.md`、`docs/ARCHITECTURE.md`，必要时更新 `docs/PROTOCOL.md`。
 - 交付说明区分：主机单测通过、编译/启动通过、已烧录、已在真机走通。
 - 不自动提交或发布；需要提交/推送时按用户当次指令执行。
+
+## 8. 工作台 UI 约定
+
+- 视觉规范以根目录 `DESIGN.md` 为准，执行记录见 `docs/UI_REDESIGN_PLAN.md`。沿用用户确认的左右工具站、银色机身、托管 Noto Sans SC 和谷仓品牌，不自行换风格。
+- 固定左侧固件栏，右侧设备预览；本地 BIN 为主操作，示例为辅助，最近使用只显示名称与打开/移除记录。删除记录不删除固件缓存或运行数据，不影响当前会话。顶栏不重复放“更换”。URL 放设备工具；市场、槽入口隐藏。
+- 开发工具只有一个入口，可停靠下方/右侧、调整尺寸、最大化。桌面占位并缩小设备区域，不能遮住画面/操作栏；点击设备不能收起工具。手机模态覆盖并管理焦点。
+- 页签固定为日志、性能、设备、声音、设置、关于。声音只含音量、静音、麦克风；设置包含当前固件清除运行数据和重置布局；关于包含使用/兼容说明与作者、官方两个链接。不加独立设置弹窗、高级播放、音频诊断或手动电台入口。
+- 音量/静音保存到本机，刷新、重启、切换固件/方式后保留；麦克风不自动申请或打开。清除运行数据必须明确当前固件并确认；重置布局不能清固件数据。
+- 字体、按钮、输入、选择控件沿用全局变量；关于页与其他页签使用同一字体，仅日志/十六进制可用等宽。文案更新后补齐托管字体子集，验收检查实际渲染字体。
+- 机身使用 `web/assets/device/silver-shell-v1.png` 的银色材质，正面圆形操作视图。仅在环带显示素材，中心透明；不得用高光、黑色素材或假玻璃遮住固件画面。`#screen` 无边框，它的 rect 是触摸基准，不能做透视变形。
+- 侧键位于右上约 1 点半，位置、角度、比例须与素材逐项对齐。透明命中区可扩大，悬停和按下只在真实键帽处反馈，不另画偏移按钮、不用绿色粗框。说明只在悬停/键盘聚焦出现；使用短提示，不自动弹窗。
+- 默认窗口高度内完成基础操作，不显示常驻保存/隐私/规格小字。长列表与日志允许内部滚动，不能隐藏滚动条掩盖溢出。检查 1440×900、1280×720、390×844 并截图复核。
+- 固件启动与首帧就绪分开反馈；禁用操作说明原因；录屏显示红色状态和“停止录屏”。用户主动打开的工具不自动关闭或跳页。
+- UI 发事件，App 处理业务；同一动作只绑定一次。按钮、输入、链接、summary、dialog 中的空格/键盘不能驱动设备侧键。
+- 配网检测只开放帮助入口，不抢占面板；虚拟网络按 `label === "nvs"` 定位，保留 nvsfactory 和已有设置，不反向代理设备 SoftAP。
