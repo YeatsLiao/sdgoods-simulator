@@ -1,2 +1,2 @@
 @echo off
-node --test "%~dp0..\tests\*.test.js"
+node "%~dp0run-tests.mjs"
