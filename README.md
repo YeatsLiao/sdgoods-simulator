@@ -1,47 +1,68 @@
 # 谷仓次元屏模拟器
 
-在浏览器里运行 ESP32-S3 次元屏整机固件，支持本机加速、扬声器与麦克风、Flash 持久化、串口/寄存器调试、截图与录屏。支持本地完整版与静态浏览器版。
+在浏览器里运行 ESP32-S3 次元屏固件。支持圆屏触摸、侧键、音频、串口调试、截图和录屏。
 
-## 快速开始
+**[打开在线模拟器](https://yeatsliao.github.io/sdgoods-simulator/)** · [使用指南](docs/USER_GUIDE.md) · [问题反馈](https://github.com/YeatsLiao/sdgoods-simulator/issues)
 
-Windows 双击 `start.cmd`，或在项目目录运行：
+![次元屏工作台，左侧打开固件，右侧操作圆屏](docs/images/workbench.png)
+
+左侧打开 BIN 或从最近记录继续，右侧直接操作圆屏。支持整机 BIN 和兼容的 SDGOODS 纯 app 包。在线版在浏览器内运行 WASM，进度保存在当前站点。内置小智 AI 次元屏适配版 v2.5.0，可查看配网界面。静态版的语音联网仍待接入。
+
+Radio、小智等联网固件请使用本地版。固件支持手动配网时，使用虚拟 Wi-Fi `myssid`，密码 `mypassword`。公开版进展见[联网试玩](docs/ONLINE_PLAY.md)。
+
+## 本地启动
+
+需要 Python 3.10+ 和支持 WebGL2、AudioWorklet、IndexedDB 的浏览器。启动后打开 [http://127.0.0.1:8765/](http://127.0.0.1:8765/)。首次启动会联网下载并校验 ESP-EMU 1.1.0。
+
+### Windows PowerShell
 
 ```powershell
+git clone https://github.com/YeatsLiao/sdgoods-simulator.git
+Set-Location sdgoods-simulator
 python server/serve.py
 ```
 
-默认打开 `http://127.0.0.1:8765/`。首次运行会联网下载并校验 ESP-EMU 1.1.0，缓存到 `runtime/`。端口被占用时：
+也可以双击 `start.cmd`。本机加速需要 x86-64 和 Ubuntu WSL。
 
-```powershell
-python server/serve.py --port 8766
+### Linux
+
+```bash
+git clone https://github.com/YeatsLiao/sdgoods-simulator.git
+cd sdgoods-simulator
+python3 server/serve.py
 ```
 
-要求：
+x86-64 Linux 支持本机加速。端口被占用时，在对应启动命令末尾加 `--port 8766`。
 
-- Python 3.10+。
-- 浏览器 Edge / Chrome（WebGL2、AudioWorklet、IndexedDB）。
-- 本机加速：x86-64 Linux，或 Windows 上的 Ubuntu WSL。没有时使用浏览器 WASM 模式。
+## 开发工具和测试
 
-## 开始试玩
+![开发工具停靠在设备下方，显示串口日志及其他页签](docs/images/developer-tools.png)
 
-1. 点击「打开 BIN」，或把固件拖到设备预览区。支持 ESP32-S3 整机 BIN 和兼容的 SDGOODS 纯 app 包。
-2. 等圆屏亮起，再触摸圆屏或操作右上的银色侧键。
-3. 点击「试玩示例」可运行谷仓官方电子徽章。已有固件也可从「最近使用」重新打开。
+开发工具支持下方和右侧停靠。重启保留进度，清除运行数据只重置当前固件。BLE、NFC、电池和真实硬件时序请用真机验证。
 
-本机加速适合较重的游戏。浏览器模式使用 WASM，无需 WSL。重启会保留运行数据，清除运行数据会重置当前固件。
-
-## 文档
-
-- [使用指南](docs/USER_GUIDE.md) · 操作、数据和常见问题
-- [发布与 GitHub Pages](docs/RELEASE.md) · 打包、部署、验收与回退
-- [变更记录](CHANGELOG.md) · 发布候选版本
-- [架构](docs/ARCHITECTURE.md) · [协议](docs/PROTOCOL.md) · [设计规范](DESIGN.md)
-
-## 开发与测试
+Windows PowerShell：
 
 ```powershell
 node tools/run-tests.mjs
 python tools/offline_realtime_check.py
 ```
 
-前端使用原生 ES 模块，服务端使用 Python 标准库。模拟运行时来自 [Espressif ESP-EMU 1.1.0](https://github.com/espressif/esp-emulator/releases/tag/v1.1.0)。
+Linux：
+
+```bash
+node tools/run-tests.mjs
+python3 tools/offline_realtime_check.py
+```
+
+## 源码与第三方许可
+
+本仓库公开源码。模拟器自身的根级许可证尚待维护者选定。第三方素材和依赖适用各自上游条款。
+
+- [ESP-EMU 1.1.0](https://github.com/espressif/esp-emulator/releases/tag/v1.1.0) 由 Espressif 提供。
+- [谷仓次元屏 × 小智 AI v2.5.0](https://github.com/YeatsLiao/sdgoods-xiaozhi/releases/tag/v2.5.0) 的 [LICENSE](web/demo/LICENSE) 和 [NOTICE](web/demo/NOTICE) 随示例分发。[平台引导文件](web/platform/README.md)另有来源说明。
+- Noto Sans SC 字体子集采用 [SIL OFL 1.1](web/assets/fonts/OFL.txt)。[品牌素材](web/assets/brand/README.md)和[机身素材](web/assets/device/README.md)见各自说明。
+
+## 文档
+
+- [使用指南](docs/USER_GUIDE.md) · [发布与 GitHub Pages](docs/RELEASE.md) · [变更记录](CHANGELOG.md)
+- [架构](docs/ARCHITECTURE.md) · [协议](docs/PROTOCOL.md) · [设计规范](DESIGN.md)

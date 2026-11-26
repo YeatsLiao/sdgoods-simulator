@@ -4,11 +4,20 @@
 
 在仓库的 Settings → Pages 中选择 GitHub Actions 作为来源。确认代码、品牌、平台文件及运行时可公开分发后，从 Actions 手动运行「Publish browser simulator」。工作流从固定上游版本取得 WASM，校验归档 SHA-256 后生成静态发布包。项目站点支持 `/<仓库名>/` 子路径。
 
-静态版提供浏览器 WASM、打开本地 BIN 和本地进度。原生进程、Python WebSocket 和网络中继由本地完整版提供。公开包仅内置谷仓官方电子徽章纯 app 样例，记录见 `web/demo/README.md`。
+静态版提供浏览器 WASM、打开本地 BIN 和本地进度。原生进程、Python WebSocket 和网络中继由本地完整版提供。公开包内置小智 AI 次元屏适配版整机示例，记录见 `web/demo/README.md`。
+
+### Windows PowerShell
 
 ```powershell
 python tools/package_pages.py runtime/pages-preview/sdgoods-simulator
 python -m http.server 8767 --bind 127.0.0.1 --directory runtime/pages-preview
+```
+
+### Linux
+
+```bash
+python3 tools/package_pages.py runtime/pages-preview/sdgoods-simulator
+python3 -m http.server 8767 --bind 127.0.0.1 --directory runtime/pages-preview
 ```
 
 访问 `http://127.0.0.1:8767/sdgoods-simulator/`。输出目录需是新目录。回退时对已验证的上一个发布版本重新执行部署工作流，或用其源版本重新生成发布包。
@@ -27,7 +36,6 @@ GitHub Pages 操作参考 [GitHub 官方文档](https://docs.github.com/en/pages
 
 ## 当前验收记录
 
-- 发布包内置谷仓电子徽章纯 app 示例，通过平台引导层拼装后运行。
+- 公开包内置小智 AI 次元屏适配版 v2.5.0 整机 BIN，SHA-256 与上游发布一致。
 - 主机单元测试 199 项与原生时钟离线检查通过。
 - Doom 听感、电台联网、小智和傻妞配网以及全套交互验收仍待记录。
-- 电子徽章在本地静态预览中已进入应用初始化，目前在射频校准附近停止输出日志，画面仍为黑屏。
