@@ -418,3 +418,22 @@ App.setSoundPreferences 经 sound-preferences.js 校验数值，将 sound 偏好
 FirmwareLibrary.hideRecent 只写 recentHidden，不删除源文件、缓存和 Flash；prepare 时重新显示该条目。UI 发 sdg:library hide-history，App 仅刷新最近使用，不停止会话。
 
 机身银色素材仅绘制在 masked 环带，不覆盖 Canvas 中心；侧键按素材映射定位，hover/pressed 反馈使用同一个几何区域。Canvas 无边框无透视，触摸 rect 与协议保持不变。完整视觉规范见根目录 DESIGN.md。
+
+
+### 早期银壳实现（历史记录，已由 A 版替代）
+
+index.html 的 device-shell SVG 与确认预览共用 silver-shell-v1.png 和1000×1000映射；环带外499/内470并保留原键帽区域，图像以105%居中。device.css 的2.2%内距控制Canvas及触摸提示基准，中心无反光遮盖；输入仍由原side按钮及App处理。悬停只有短提示，按下通过SVG中同一键帽几何轻微压暗，无新事件绑定和协议改动。
+
+
+### 圆屏几何演进与休眠兼容（2026-11-26）
+
+`.device-aperture` 用 `aspect-ratio: 1` 和 `border-radius: 50%` 统一裁剪 360×360 Canvas、等待层和触摸提示。屏幕与 SVG 环带遮罩共用 `device.css` 的圆心和直径变量。原素材内缘存在轻微不规则，正圆覆盖其暗边并伸入环带下方，接缝由上层金属边遮住。触摸继续使用 Canvas 的真实 rect。
+
+app/power-state.js仅识别完整SDGOODS power标签信息行及电源关机栈，不按无帧/低FPS推断睡眠。App监听现有log/fault/error，无新增Worker或WebSocket协议：进入休眠后隐藏Canvas、保留固件入口；深睡已知退出/睡眠栈不作为普通崩溃弹窗。下一次侧键松开复用restart(false)，保留Flash。WASM在故障后restart重新启动tick调度。正常返回导航、轻量关屏仍发送真实GPIO；普通故障照常报告。不把此日志兼容层描述为通用LEDC背光或深睡RAM仿真。
+
+
+## 发布候选版
+
+正式机身为 `web/assets/device/silver-shell-a.webp`。透明开口直接与画布叠合，画面几何与侧键坐标以 DESIGN.md 为准。上文旧素材与遮罩参数为迭代记录。
+
+静态发布包由 `tools/package_pages.py` 生成。入口、WASM 文件、平台引导层和静态状态文件分发在同一站点子路径下。公开站点使用浏览器运行模式，回环服务仍负责本机加速和网络中继。
