@@ -36,7 +36,7 @@
 .dock-resize:hover,.dock-resize:focus-visible,.is-resizing .dock-resize { background: #7da62466; }
 #app[data-surface=tools] .dock-resize { display: block; }
 .is-resizing { user-select: none; cursor: ns-resize; }
-@media (min-width: 801px) {
+@media (width > 800px) and (height > 540px), (width > 960px) {
  .device-column { padding-bottom: 28px; }
  #app[data-surface=tools][data-dock=right] .panel-column { left: auto; right: 0; top: 0; bottom: 0; height: auto; width: var(--dock-width); border-width: 0 0 0 1px; }
  #app[data-panel-open=true][data-surface=tools][data-dock=right] .device-column { width: calc(100% - var(--dock-width)); padding-bottom: 24px; --stage-limit: calc(100dvh - 330px); }
@@ -56,7 +56,7 @@
  #app[data-surface=tools][data-dock-max=true] .dock-resize { display: none; }
  #app[data-surface=tools][data-dock-max=true] .tabs-host { padding-top: 0; padding-right: 158px; }
 }
-@media (max-width: 800px) {
+@media (max-width: 800px), (max-width: 960px) and (max-height: 540px) {
  .brand h1 { font-size: 17px; }
  .brand-mark { width: 28px; height: 28px; }
  .official-mark > span { font-size: 21px; }
@@ -68,7 +68,9 @@
  .sidebar-bottom { justify-content: flex-end; }
  .dock-actions { display: none !important; }
  #app[data-surface=tools] .dock-resize { display: none; }
- #app[data-surface=tools] .tabs-host { padding-right: 40px; }
+ #app[data-surface=tools] .panel-toolbar { position: static; padding: 2px 10px; border-bottom: 1px solid var(--border); font-size: 15px; }
+ #app[data-surface=tools] #workspace-panel-title { display: block; }
+ #app[data-surface=tools] .tabs-host { padding-inline: 8px; }
  #app[data-surface=tools] .tabs-host .tab { padding: 8px 7px; gap: 4px; font-size: 13px; }
 }
 
@@ -98,18 +100,16 @@
 .settings-support #reset-layout { align-self: flex-start; }
 .settings-help a + a { margin-left: 18px; }
 .console-btn,.console-send,.inspector-panel button { border-radius: 6px; }
-@media (min-width: 801px) {
+@media (width > 800px) and (height > 540px), (width > 960px) {
  #app[data-dock=bottom] .panel-sound { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px 32px; }
  #app[data-dock=bottom] .settings-support { grid-column: 1 / -1; }
  #app[data-dock-max=true] .panel-sound { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px 32px; }
  #app[data-dock-max=true] .settings-support { grid-column: 1 / -1; }
 }
-@media (max-width: 800px) {
+@media (max-width: 800px), (max-width: 960px) and (max-height: 540px) {
  .sidebar-runtime { align-items: start; }
  #app .mode-choice { font-size: 13px; min-height: 32px; padding: 4px 6px; }
  .mode-description { font-size: 12px; line-height: 1.5; margin-top: 6px; }
- #app .device-column { --stage-limit: calc(100dvh - 560px); }
- #app[data-panel-open=true][data-surface=tools] .device-column { --stage-limit: calc(100dvh - 560px); }
  #app .control-bar > .btn { font-size: 14px; padding: 7px 9px; min-height: 40px; }
  #app .control-bar .icon { width: 16px; height: 16px; }
 }
@@ -128,10 +128,10 @@
 #app #record[aria-pressed=true] { border-color: #d8a0a6; background: #fff3f3; color: #a52b36; }
 #record[aria-pressed=true]::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #cc3444; flex: none; }
 .control-bar[data-hint]:not([data-hint=""])::after { content: attr(data-hint); position: absolute; z-index: 15; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); background: #26302b; color: #fff; padding: 7px 12px; border-radius: 6px; white-space: nowrap; font-size: 13px; pointer-events: none; }
-@media (min-width: 801px) {
+@media (width > 800px) and (height > 540px), (width > 960px) {
  #app[data-dock=bottom] .panel-settings,#app[data-dock-max=true] .panel-settings { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
-@media (max-width: 800px) {
+@media (max-width: 800px), (max-width: 960px) and (max-height: 540px) {
  #app[data-surface=tools] .tabs-host .tab .icon { display: none; }
  #app[data-surface=tools] .tabs-host .tab { min-width: 40px; padding: 8px 7px; }
  #app[data-surface=tools] .tabs-host .tabs { gap: 2px; }
@@ -139,8 +139,20 @@
 }
 @media (hover: none) { .control-bar::after { display: none; } }
 
-@media (min-width: 801px) {
+@media (width > 800px) and (height > 540px), (width > 960px) {
  #app[data-surface=tools][data-dock=right]:not([data-dock-max=true]) .tabs-host .tabs { gap: 2px; }
  #app[data-surface=tools][data-dock=right]:not([data-dock-max=true]) .tabs-host .tab { font-size: 14px; gap: 5px; padding-inline: 7px; }
  #app[data-surface=tools][data-dock=right]:not([data-dock-max=true]) .tab .icon { width: 16px; height: 16px; }
+}
+
+@media (max-width: 800px), (max-width: 960px) and (max-height: 540px) {
+ #app .device-column { overflow: auto; }
+ #app .control-bar { flex-wrap: wrap; padding-bottom: 4px; }
+}
+
+@media (max-width: 599px) and (max-height: 650px) {
+ #app .device-column { --compact-stage-limit: max(140px, calc(100dvh - 375px)); }
+ .device-stage { margin: 8px 0; }
+ .device-prompt { display: none; }
+ #app .control-bar > .btn { padding-inline: 5px; gap: 4px; white-space: nowrap; }
 }

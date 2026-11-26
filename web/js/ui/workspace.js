@@ -1,5 +1,7 @@
 import { initialWorkspace, workspaceTransition, droppedFirmware } from "../app/workspace-state.js";
 
+export const COMPACT_WORKSPACE = "(max-width: 800px), (max-width: 960px) and (max-height: 540px)";
+
 const SCREEN_COPY = {
   idle: ["等待你的固件", "打开 BIN，让次元屏亮起来"],
   preparing: ["正在准备固件", "读取、校验并恢复本地数据"],
@@ -18,7 +20,7 @@ export function createWorkspace(root, { onFile, onError }) {
   const overlay = byId("drop-overlay");
   let returnFocus = null;
   function syncPanelSurface() {
-    const modal = state.open && Boolean(window.matchMedia?.("(max-width: 800px)").matches);
+    const modal = state.open && Boolean(window.matchMedia?.(COMPACT_WORKSPACE).matches);
     panel.setAttribute("role", modal ? "dialog" : "region");
     if (modal) panel.setAttribute("aria-modal", "true");
     else panel.removeAttribute("aria-modal");

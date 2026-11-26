@@ -1,5 +1,5 @@
 import { createDock } from "./dock.js";
-import { createWorkspace, confirmClearData } from "./workspace.js";
+import { COMPACT_WORKSPACE, createWorkspace, confirmClearData } from "./workspace.js";
 import { createLibraryPanel } from "./library-panel.js";
 import { createAudioPanel } from "./audio-panel.js";
 import { createSlotsPanel } from "./slots-panel.js";
@@ -184,7 +184,7 @@ export function createUI(root) {
   const sidebarLibrary = find("sidebar-library");
   function placeLibrary() {
     if (!sidebarLibrary) return;
-    const target = window.matchMedia?.("(max-width: 800px)").matches ? libraryPanel : sidebarLibrary;
+    const target = window.matchMedia?.(COMPACT_WORKSPACE).matches ? libraryPanel : sidebarLibrary;
     target.append(libraryList, find("library-busy"));
   }
   placeLibrary();
