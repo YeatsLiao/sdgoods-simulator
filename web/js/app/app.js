@@ -1,3 +1,4 @@
+import { FirmwarePower, powerRuntimeExit } from "./power-state.js";
 import { normalizeSoundPreferences } from "./sound-preferences.js";
 import { SlotController } from "./slot-controller.js";
 import { toArrayBuffer, flatInfo } from "./firmware-info.js";
@@ -44,6 +45,8 @@ export class App {
     this.session = null;
     this.current = null;
     this.mode = "wasm";
+    this.powerState = "on";
+    this.wakeKeyDown = false;
     this.nativeAvailable = false;
     this.running = false;
     this.hasFrame = false;
@@ -143,6 +146,9 @@ export class App {
       status = null;
     }
     this.nativeAvailable = Boolean(status?.native);
+    if (status?.static) {
+      this.byId("try-sample")?.toggleAttribute("hidden", !status.sample?.name);
+    }
     this.ui.setNativeAvailable?.(this.nativeAvailable);
     this.mode = this.ui.setMode?.(this.nativeAvailable ? "native" : "wasm")
       ?? (this.nativeAvailable ? "native" : "wasm");
@@ -396,8 +402,11 @@ export class App {
   }
 
   wireSession(session) {
+    this.powerMonitor = new FirmwarePower();
+    this.setPower?.("on");
     session.on("frame", ({ packed }) => {
       this.renderer.draw(new Uint16Array(packed));
+      if (this.powerState === "waking") this.setPower("on");
       if (!this.hasFrame) {
         this.ui.setPhase?.("running");
         this.ui.setStatus?.("运行中");
@@ -405,6 +414,7 @@ export class App {
       this.hasFrame = true;
     });
     session.on("audio", ({ pcm, format }) => {
+      if (["deep", "light", "off", "waking"].includes(this.powerState)) return;
       this.lastDeviceAudioAt = Date.now();
       this.audio.play(new Uint8Array(pcm), format);
     });
@@ -413,6 +423,7 @@ export class App {
     });
     session.on("log", (text) => {
       this.console.append(text);
+      for (const state of this.powerMonitor.push(text)) this.setPower(state);
       this.maybeSetupHint(text);
       this.maybeFollowStream(text);
     });
@@ -436,10 +447,17 @@ export class App {
       }
     });
     session.on("error", ({ message }) => {
+      if (powerRuntimeExit(this.powerState, message)) {
+        this.ui.showError?.(null);
+        this.ui.setStatus?.("已关屏，按侧键开机");
+        return;
+      }
       this.ui.setRunning?.(false);
       this.fail(message);
     });
     session.on("fault", ({ report }) => {
+      for (const state of this.powerMonitor.push(String(report) + "\n")) this.setPower(state);
+      if (powerRuntimeExit(this.powerState, report)) return;
       this.inspector.setFault(report);
       this.ui.setStatus?.("固件异常，已保留日志");
     });
@@ -497,6 +515,7 @@ export class App {
     this.running = false;
     this.hasFrame = false;
     this.renderer.reset();
+    this.setPower("on");
     this.ui.setRunning?.(false);
   }
 
@@ -513,6 +532,8 @@ export class App {
     // A restart is a new run: without `booted` after it (native keeps the
     // session and only reports status), the hint must be able to fire again.
     this.hasFrame = false;
+    this.powerMonitor = new FirmwarePower();
+    this.setPower?.("waking");
     this.ui.setPhase?.("starting");
     this.beginRunHintState();
     this.renderer.reset();
@@ -609,7 +630,7 @@ export class App {
   }
 
   touchStart(event) {
-    if (this.activePointer !== undefined || event.button !== 0 || !this.session || !this.hasFrame) return;
+    if (this.activePointer !== undefined || event.button !== 0 || !this.session || !this.hasFrame || (this.powerState && this.powerState !== "on")) return;
     this.activePointer = event.pointerId;
     this.elements.canvas.setPointerCapture(event.pointerId);
     const touch = { ...this.screenPoint(event), down: true };
@@ -632,8 +653,24 @@ export class App {
     this.macroRecorder.recordTouch(touch);
   }
 
+  setPower(state) {
+    this.powerState = state;
+    this.ui.setPower?.(state);
+    if (["deep", "light", "off"].includes(state)) {
+      this.audio?.flush();
+      if (this.direct?.active) this.stopDirect();
+    }
+  }
+
   key(down) {
     this.elements?.side?.classList.toggle("is-active", Boolean(down));
+    if (["deep", "off"].includes(this.powerState) || this.wakeKeyDown) {
+      // ESP-EMU 1.1.0 can exit in deep sleep. A wake is a cold boot with the same Flash.
+      if (down) this.wakeKeyDown = true;
+      else if (this.wakeKeyDown) { this.wakeKeyDown = false; this.restart(false); }
+      return;
+    }
+    if (this.powerState === "waking") return;
     this.session?.key(down);
     this.macroRecorder.recordKey(down);
   }

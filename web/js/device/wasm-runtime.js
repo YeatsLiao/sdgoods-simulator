@@ -61,7 +61,7 @@ export class WasmRuntime {
     const image = options.flash ? new Uint8Array(options.flash) : this.base;
     const generation = ++this.generation;
 
-    const module = await import(new URL("../../../runtime/esp_emu.js", import.meta.url).href);
+    const module = await import(new URL("../../runtime/esp_emu.js", import.meta.url).href);
     await module.default();
     const emulator = new module.WasmEmulator("esp32s3");
     emulator.load_default_rom();
@@ -100,6 +100,7 @@ export class WasmRuntime {
 
   relayUrl() {
     try {
+      if (self.location.hostname !== "127.0.0.1" && self.location.hostname !== "localhost") return "";
       const url = new URL("/relay", self.location.href);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       return url.href;
@@ -131,6 +132,12 @@ export class WasmRuntime {
     }
     try {
       this.emulator.restart();
+      clearTimeout(this.timer);
+      this.faulted = false;
+      this.stopped = false;
+      this.timeCredit = 0;
+      this.previousTick = performance.now();
+      this.tick(++this.generation);
       this.emit("status", { status: "已重启，Flash 数据保留" });
     } catch (error) {
       const flash = this.emulator?.flash_state?.();

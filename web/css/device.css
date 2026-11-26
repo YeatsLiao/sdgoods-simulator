@@ -1,84 +1,75 @@
-/* Approved silver-shell asset; live firmware is a separate, unobscured canvas. */
+/* Geometry is locked to the approved A shell. */
 .device-stage { container-type: inline-size; }
 .device-bezel {
- --bezel-pad: 3.2%;
+ --screen-x: 49.7%;
+ --screen-y: 49.4%;
+ --screen-diameter: 91.4%;
  position: relative;
+ isolation: isolate;
  width: 100%;
  aspect-ratio: 1;
- padding: var(--bezel-pad);
+ padding: 0;
  border: 0;
  border-radius: 50%;
  background: transparent;
- box-shadow: 0 12px 22px -13px #24324765;
 }
-/* Keep the artwork's black center outside the live display; the canvas is never shaded. */
-.device-bezel::before {
- content: '';
+/* Only the original ring and key are visible; firmware pixels stay unshaded. */
+.device-shell {
  position: absolute;
  inset: 0;
- z-index: 1;
- border-radius: 50%;
- background-image: url("../assets/device/silver-shell-v1.png");
- background-size: 105% 105%;
- background-position: center;
- -webkit-mask: radial-gradient(circle closest-side,#0000 93.6%,#000 94.1%,#000 99.5%,#0000 100%);
- mask: radial-gradient(circle closest-side,#0000 93.6%,#000 94.1%,#000 99.5%,#0000 100%);
+ z-index: 2;
+ width: 100%;
+ height: 100%;
  pointer-events: none;
 }
-.device-bezel::after {
- content: '';
+.device-aperture {
  position: absolute;
- inset: var(--bezel-pad);
+ left: var(--screen-x);
+ top: var(--screen-y);
+ width: var(--screen-diameter);
+ aspect-ratio: 1;
+ transform: translate(-50%, -50%);
  border-radius: 50%;
- box-shadow: 0 0 0 .6px #14191d88,0 1px 2px 1px #14191d25;
- pointer-events: none;
+ overflow: hidden;
+ background: #08090a;
 }
-#screen { display: block; width: 100%; height: 100%; border: 0; border-radius: 50%; background: #000; touch-action: none; }
+#screen { display: block; width: 100%; height: 100%; border: 0; touch-action: none; }
+#app[data-power]:not([data-power=on]) .device-aperture > * { visibility: hidden; }
+#app[data-power]:not([data-power=on]) .status-dot { background: #89909b; }
 .side-key {
  position: absolute;
- z-index: 2;
- left: 87.3%;
- top: 19.1%;
+ z-index: 3;
+ left: 85.8%;
+ top: 21.4%;
  width: 44px;
  height: 64px;
  padding: 0;
  border: 0;
- border-radius: 10px;
+ border-radius: 20px;
  background: transparent;
  transform: translate(-50%,-50%) rotate(-38deg);
  touch-action: none;
 }
-/* The artwork contains the key. This layer adds input and focus feedback only. */
-.side-key::before {
- content: '';
- position: absolute;
- left: 50%; top: 50%;
- width: 2cqw;
- height: 11.6cqw;
- transform: translate(-50%,-50%);
- border-radius: 999px;
- background: transparent;
- transition: box-shadow 120ms, background 120ms;
-}
-.side-key:hover:not(:disabled)::before,.side-key:focus-visible::before { box-shadow: inset 1px 0 2px #fff9, inset -1px 0 2px #26323b55, 0 0 0 1px #69778088; background: #ffffff20; }
-.side-key.is-active::before { background: #26323b30; box-shadow: inset 1px 1px 3px #17232b80, 0 0 0 1px #69778088; }
+.side-key:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .side-key:disabled { opacity: 1; }
+.device-key-shade { opacity: 0; transition: opacity 100ms; }
+.device-stage:has(.side-key.is-active) .device-key-shade { opacity: .1; }
 .device-stage::after {
  content: attr(data-key-hint);
  position: absolute;
- z-index: 3;
- top: 3%; right: -2%;
+ z-index: 4;
+ left: 89%; top: 2%;
  width: max-content;
- padding: 6px 10px;
+ padding: 5px 9px;
  border: 1px solid var(--border-strong);
- border-radius: 8px;
+ border-radius: 6px;
  background: #fff;
  color: var(--text-soft);
- font-size: 14px;
+ font-size: 13px;
  line-height: 1.5;
- box-shadow: var(--shadow);
  opacity: 0;
  pointer-events: none;
 }
 .device-stage:has(.side-key:hover:not(:disabled))::after,.device-stage:has(.side-key:focus-visible)::after { opacity: 1; }
 @media (hover: none) { .device-stage::after { display: none; } }
+@media (prefers-reduced-motion: reduce) { .device-key-shade { transition: none; } }

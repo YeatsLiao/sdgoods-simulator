@@ -295,7 +295,7 @@ export function createUI(root) {
   // Status / firmware / mode ------------------------------------------------
   function setStatus(text) {
     const message = text == null ? "" : String(text);
-    refs.statusText.textContent = ({ idle: "未启动", preparing: "准备中", starting: "启动中", waiting: "等待画面", running: "运行中", error: "异常" })[app.dataset.phase] ?? message;
+    refs.statusText.textContent = ({ deep: "已关屏", light: "休眠中", suspended: "已关屏", off: "已关机", waking: "开机中" })[app.dataset.power] ?? ({ idle: "未启动", preparing: "准备中", starting: "启动中", waiting: "等待画面", running: "运行中", error: "异常" })[app.dataset.phase] ?? message;
     refs.status.title = message;
     refs.status.classList.toggle("is-idle", !message);
   }
@@ -600,6 +600,13 @@ export function createUI(root) {
     slots: slotsApi,
     launcher: launcherApi,
     setRunning,
+    setPower(state) {
+      app.dataset.power = state;
+      const dark = state !== "on";
+      refs.screenshot.disabled = dark || !screenReady;
+      refs.record.disabled = dark || !app.classList.contains("is-running");
+      setStatus(dark ? "按侧键唤醒，重启保留数据" : "运行中");
+    },
     setRecording,
     setMuted,
     setVolume,
