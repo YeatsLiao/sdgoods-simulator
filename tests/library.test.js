@@ -177,7 +177,7 @@ test("FirmwareLibrary seeds an unremovable sample entry", () => {
   assert.equal(entries.length, 1);
   assert.equal(entries[0].id, "sample");
   assert.equal(entries[0].kind, "sample");
-  assert.equal(entries[0].name, "Chiikawa GO 示例");
+  assert.equal(entries[0].name, "谷仓电子徽章");
   assert.equal(library.remove("sample"), false);
 });
 

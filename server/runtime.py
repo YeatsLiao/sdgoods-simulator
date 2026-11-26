@@ -33,11 +33,7 @@ NATIVE_NAME = f"esp-emu-{VERSION}-linux"
 MAX_FIRMWARE = 32 * 1024 * 1024
 MAX_MIC_FRAME = 64 * 1024
 
-SAMPLE_NAMES = (
-    "chiikawa-go-demo-0.1.1-full.bin",
-    "chiikawa-go-demo-full.bin",
-)
-SAMPLE_CORES = ROOT.parent / "sdgoods-chiikawa-go" / "dist"
+SAMPLE_FIRMWARE = WEB_DIR / "demo" / "SDGOODS_EBADGE_app.bin"
 
 _install_lock = threading.Lock()
 _native_command: Optional[list[str]] = None
@@ -150,11 +146,7 @@ def install_native(command: list[str]) -> tuple[str, str]:
 
 
 def sample_firmware() -> Optional[Path]:
-    for name in SAMPLE_NAMES:
-        candidate = SAMPLE_CORES / name
-        if candidate.is_file():
-            return candidate
-    return None
+    return SAMPLE_FIRMWARE if SAMPLE_FIRMWARE.is_file() else None
 
 
 def sample_metadata() -> dict:

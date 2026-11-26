@@ -8,9 +8,9 @@ export const MAX_FIRMWARE_SIZE = 32 * 1024 * 1024;
 
 const STORAGE_KEY = "library.entries";
 const SAMPLE_ID = "sample";
-const SAMPLE_NAME = "Chiikawa GO 示例";
-const SAMPLE_SOURCE = "/demo.bin";
-const STATUS_URL = "/api/status";
+const SAMPLE_NAME = "谷仓电子徽章";
+const SAMPLE_SOURCE = new URL("../../demo.bin", import.meta.url).pathname;
+const STATUS_URL = new URL("../../api/status", import.meta.url).pathname;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const ENTRY_KINDS = new Set(["sample", "file", "url", "market"]);
 
