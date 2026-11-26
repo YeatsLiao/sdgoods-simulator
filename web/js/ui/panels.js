@@ -169,7 +169,7 @@ export function createUI(root) {
     el("p", {}, "公开版支持离线试玩。联网固件请使用本地版。"),
     el("p", {}, "重启保留进度。清除运行数据会重置当前固件。"),
     el("p", {}, "ESP-EMU 1.1.0 · ESP32-S3。暂不模拟 BLE、NFC 和电池。发布固件前请用实物复测。"),
-    el("a", { href: "https://github.com/yeatsliao", target: "_blank", rel: "noreferrer noopener" }, "作者 · yeatsliao"),
+    el("a", { href: "https://github.com/YeatsLiao", target: "_blank", rel: "noreferrer noopener" }, "作者 · YeatsLiao"),
     el("a", { href: "https://sdgoods.ai/home.html", target: "_blank", rel: "noreferrer noopener" }, "谷仓官方 · SDGOODS"));
   mountPanel("sound", "panel-sound",
     el("section", { class: "settings-group" }, el("h3", {}, "声音"),
