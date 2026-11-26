@@ -76,6 +76,10 @@ export class DeviceSession extends Emitter {
     this.worker.postMessage({ type: "key", down });
   }
 
+  setSpeed(speed) {
+    this.worker.postMessage({ type: "setSpeed", speed });
+  }
+
   uart(text) {
     this.worker.postMessage({ type: "uart", text });
   }

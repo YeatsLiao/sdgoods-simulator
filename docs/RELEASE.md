@@ -4,7 +4,7 @@
 
 在仓库的 Settings → Pages 中选择 GitHub Actions 作为来源。确认代码、品牌、平台文件及运行时可公开分发后，从 Actions 手动运行「Publish browser simulator」。工作流从固定上游版本取得 WASM，校验归档 SHA-256 后生成静态发布包。项目站点支持 `/<仓库名>/` 子路径。
 
-静态版提供浏览器 WASM、打开本地 BIN 和本地进度。原生进程、Python WebSocket 和网络中继由本地完整版提供。公开包内置小智 AI 次元屏适配版整机示例，记录见 `web/demo/README.md`。
+静态版提供浏览器 WASM、打开本地 BIN 和本地进度。原生进程、Python WebSocket 和网络中继由本地完整版提供。公开包内置谷仓次元屏 Doom 整机示例，记录见 `web/demo/README.md`。
 
 ### Windows PowerShell
 
@@ -36,6 +36,7 @@ GitHub Pages 操作参考 [GitHub 官方文档](https://docs.github.com/en/pages
 
 ## 当前验收记录
 
-- 公开包内置小智 AI 次元屏适配版 v2.5.0 整机 BIN，SHA-256 与上游发布一致。
-- 主机单元测试 199 项与原生时钟离线检查通过。
+- 公开包内置谷仓次元屏 Doom v1.0.0 整机 BIN，SHA-256 与上游发布一致。
+- 201 项主机单测通过。本地静态发布包用浏览器 WASM 启动 Doom 并显示标题画面，性能页可即时切换目标倍率。
+- 本机浏览器在 Doom 标题画面两次抽样约为 4 FPS，2× 目标档未带来可见提升。该数值只反映这次试跑。
 - Doom 听感、电台联网、小智和傻妞配网以及全套交互验收仍待记录。

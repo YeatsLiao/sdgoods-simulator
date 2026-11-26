@@ -61,6 +61,7 @@ export class App {
     this.micLevel = 0;
     this.muted = false;
     this.volume = .8;
+    this.wasmSpeed = 1;
     this.dev = false;
     this.flashResolvers = [];
     this.autoSave = 0;
@@ -159,6 +160,10 @@ export class App {
 
   bind() {
     const elements = this.elements;
+    this.byId("wasm-speed")?.addEventListener("change", (event) => {
+      this.wasmSpeed = Number(event.target.value);
+      if (this.mode === "wasm") this.session?.setSpeed(this.wasmSpeed);
+    });
     this.byId("run")?.addEventListener("click", () => this.runCurrent());
     this.byId("restart")?.addEventListener("click", () => this.restart(false));
     this.byId("clear-open")?.addEventListener("click", () => this.restart(true));
@@ -429,6 +434,7 @@ export class App {
     });
     session.on("status", ({ status }) => this.ui.setStatus?.(status));
     session.on("booted", (event) => {
+      if (this.mode === "wasm") session.setSpeed(this.wasmSpeed);
       this.running = true;
       // A fresh boot starts a new measurement window for both hints.
       this.setupHintShown = false;

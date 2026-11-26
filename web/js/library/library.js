@@ -8,7 +8,7 @@ export const MAX_FIRMWARE_SIZE = 32 * 1024 * 1024;
 
 const STORAGE_KEY = "library.entries";
 const SAMPLE_ID = "sample";
-const SAMPLE_NAME = "谷仓次元屏 · 小智 AI";
+const SAMPLE_NAME = "谷仓次元屏 · Doom";
 const SAMPLE_SOURCE = new URL("../../demo.bin", import.meta.url).pathname;
 const STATUS_URL = new URL("../../api/status", import.meta.url).pathname;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;

@@ -33,7 +33,7 @@ NATIVE_NAME = f"esp-emu-{VERSION}-linux"
 MAX_FIRMWARE = 32 * 1024 * 1024
 MAX_MIC_FRAME = 64 * 1024
 
-SAMPLE_FIRMWARE = WEB_DIR / "demo" / "sdgoods-xiaozhi-full.bin"
+SAMPLE_FIRMWARE = WEB_DIR / "demo" / "sdgoods-doom-full.bin"
 
 _install_lock = threading.Lock()
 _native_command: Optional[list[str]] = None

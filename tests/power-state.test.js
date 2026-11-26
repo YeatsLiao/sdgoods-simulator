@@ -42,7 +42,7 @@ test("normal firmware navigation and suspended screens still get the real key", 
 
 test("WASM restart resumes scheduling after a sleep-related emulator fault", async()=>{
  const runtime=new WasmRuntime({emit(){}});const calls=[];
- runtime.faulted=true;runtime.stopped=false;runtime.emulator={restart(){calls.push("restart");}};
+ runtime.faulted=true;runtime.stopped=false;runtime.emulator={restart(){calls.push("restart");},cycles(){return 0;}};
  runtime.tick=generation=>calls.push(generation);
  await runtime.restart();
  assert.equal(runtime.faulted,false);assert.equal(runtime.stopped,false);assert.deepEqual(calls,["restart",1]);

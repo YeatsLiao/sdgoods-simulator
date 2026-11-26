@@ -37,6 +37,7 @@ self.onmessage = async ({ data }) => {
     const method = data.type;
     if (method === "touch") runtime.touch(data.touch);
     else if (method === "key") runtime.key(data.down);
+    else if (method === "setSpeed") runtime.setSpeed?.(data.speed);
     else if (method === "uart") runtime.uart(data.text);
     else if (method === "mic") runtime.mic(data.pcm);
     else if (method === "restart") runtime.restart({ clearFlash: data.clearFlash });

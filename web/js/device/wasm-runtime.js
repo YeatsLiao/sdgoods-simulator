@@ -37,11 +37,11 @@ export class WasmRuntime {
     this.touchReads = 0;
     this.formats = { tx: null, rx: null };
     this.timeCredit = 0;
+    this.speed = 1;
     this.previousTick = 0;
     this.statsAt = 0;
     this.statsFrames = 0;
     this.statsCycles = 0;
-    this.bootAt = 0;
   }
 
   async start(options) {
@@ -85,7 +85,6 @@ export class WasmRuntime {
     this.statsAt = performance.now();
     this.statsFrames = 0;
     this.statsCycles = 0;
-    this.bootAt = performance.now();
     this.drainBus();
 
     const info = describeFirmware(image);
@@ -122,6 +121,13 @@ export class WasmRuntime {
     this.emulator = null;
   }
 
+  setSpeed(speed) {
+    if (![1, 1.5, 2].includes(speed) || this.speed === speed) return;
+    this.speed = speed;
+    this.timeCredit = 0;
+    this.previousTick = performance.now();
+  }
+
   async restart({ clearFlash = false } = {}) {
     this.panel.reset();
     if (clearFlash) {
@@ -137,6 +143,9 @@ export class WasmRuntime {
       this.stopped = false;
       this.timeCredit = 0;
       this.previousTick = performance.now();
+      this.statsAt = this.previousTick;
+      this.statsCycles = this.emulator.cycles();
+      this.statsFrames = this.frames;
       this.tick(++this.generation);
       this.emit("status", { status: "已重启，Flash 数据保留" });
     } catch (error) {
@@ -229,7 +238,7 @@ export class WasmRuntime {
     try {
       const started = performance.now();
       const deadline = started + 18;
-      this.timeCredit = Math.min(QUEUE_DELAY_MS, this.timeCredit + started - this.previousTick);
+      this.timeCredit = Math.min(QUEUE_DELAY_MS, this.timeCredit + (started - this.previousTick) * this.speed);
       this.previousTick = started;
       let output = "";
       while (this.timeCredit >= 1 && performance.now() < deadline) {
@@ -258,8 +267,9 @@ export class WasmRuntime {
         return;
       }
       this.reportStats(generation);
-      const remaining = this.timeCredit + performance.now() - started;
-      this.timer = setTimeout(() => this.tick(generation), Math.max(0, 1 - remaining));
+      const elapsed = performance.now() - started;
+      const delay = Math.max(0, (1 - this.timeCredit) / this.speed - elapsed);
+      this.timer = setTimeout(() => this.tick(generation), delay);
     } catch (error) {
       this.emit("error", { message: error.message || String(error) });
     }
@@ -274,7 +284,6 @@ export class WasmRuntime {
     const cycles = emulator?.cycles?.() ?? 0;
     const fps = (this.frames - this.statsFrames) / seconds;
     const cyclesPerSecond = (cycles - this.statsCycles) / seconds;
-    const emulatedSeconds = (now - this.bootAt) / 1000;
     this.statsAt = now;
     this.statsFrames = this.frames;
     this.statsCycles = cycles;
@@ -283,7 +292,7 @@ export class WasmRuntime {
         fps,
         frames: this.frames,
         mips: cyclesPerSecond / 1e6,
-        realTime: emulatedSeconds > 0 ? (cycles / (emulator?.cycles_per_us?.() || 1) / 1e6) / emulatedSeconds : 0,
+        realTime: cyclesPerSecond / (emulator?.cycles_per_us?.() || 1) / 1e6,
         transport: "wasm",
         touchReads: this.touchReads,
       },

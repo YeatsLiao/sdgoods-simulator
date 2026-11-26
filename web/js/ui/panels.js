@@ -164,11 +164,11 @@ export function createUI(root) {
   const networkHelp = el("p", { id: "setup-advice", hidden: true, class: "field-hint" }, "模拟器不创建真实热点。空白配置自动连接虚拟 Wi-Fi；仍停留配网时可重新打开 BIN，或确认后清除当前固件数据。云端激活按固件提示完成。");
   const dataGroup = el("section", { class: "settings-group" }, el("h3", {}, "当前固件"), currentName, refs.reset, need("setup-open"), networkHelp);
   const help = el("section", { class: "about-content" }, el("h2", { class: "panel-title" }, "关于次元屏模拟器"),
-    el("p", {}, "打开 BIN 或拖入文件开始。触摸圆屏操作；右上侧键可短按或长按，也可按住空格。"),
-    el("p", {}, "重启保留设置和进度；清除运行数据会恢复这份固件的初始状态。"),
-    el("p", {}, "本机加速通常更流畅，Windows 需要 Ubuntu WSL；浏览器方式无需 WSL，但复杂固件可能更慢。切换方式会重新启动当前固件。"),
-    el("p", {}, "开发工具可停靠下方或右侧，拖动分隔线调整尺寸，也可用方向键调整。"),
-    el("p", {}, "ESP-EMU 1.1.0 · ESP32-S3。暂不模拟 BLE、NFC 和电池；发布固件前请用实物复测。"),
+    el("p", {}, "在浏览器里运行谷仓次元屏固件。点击「试玩示例」打开 Doom，也可以打开或拖入自己的 BIN。"),
+    el("p", {}, "直接触摸圆屏。右上侧键支持短按、长按和空格。浏览器模式可在「性能」调整目标倍率。"),
+    el("p", {}, "公开版支持离线试玩。联网固件请使用本地版。"),
+    el("p", {}, "重启保留进度。清除运行数据会重置当前固件。"),
+    el("p", {}, "ESP-EMU 1.1.0 · ESP32-S3。暂不模拟 BLE、NFC 和电池。发布固件前请用实物复测。"),
     el("a", { href: "https://github.com/yeatsliao", target: "_blank", rel: "noreferrer noopener" }, "作者 · yeatsliao"),
     el("a", { href: "https://sdgoods.ai/home.html", target: "_blank", rel: "noreferrer noopener" }, "谷仓官方 · SDGOODS"));
   mountPanel("sound", "panel-sound",
@@ -213,7 +213,13 @@ export function createUI(root) {
     target.focus(); target.click();
   });
   const modeDescription = el("p", { id: "mode-description", class: "mode-description" });
+  const speedSelect = el("select", { id: "wasm-speed", title: "目标倍率受电脑性能限制，也会影响游戏节奏和声音" },
+    ...[1, 1.5, 2].map(speed => el("option", { value: String(speed) }, `${speed}×`)),
+  );
+  const speedField = el("label", { class: "select-field" }, el("span", {}, "浏览器目标倍率"), speedSelect);
   function describeMode() {
+    speedSelect.disabled = refs.mode.value !== "wasm";
+    speedField.hidden = speedSelect.disabled;
     for (const [value, node] of modeButtons) {
       node.setAttribute("aria-checked", String(refs.mode.value === value));
       node.tabIndex = refs.mode.value === value ? 0 : -1;
@@ -237,6 +243,7 @@ export function createUI(root) {
   mountPanel(
     "performance",
     "panel-performance",
+    speedField,
     el("div", { class: "stats-mount panel-mount", "aria-label": "性能指标" }),
   );
   mountPanel(

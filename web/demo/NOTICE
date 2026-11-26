@@ -1,5 +1,8 @@
-SDGOODS Dimension Screen × Xiaozhi AI
-Board port and published firmware: https://github.com/YeatsLiao/sdgoods-xiaozhi
-Upstream Xiaozhi AI: https://github.com/78/xiaozhi-esp32
+SDGOODS Doom v1.0.0
+Source and complete corresponding source for the distributed firmware:
+https://github.com/YeatsLiao/sdgoods-doom/tree/v1.0.0
 
-The firmware is the unmodified v2.5.0 release image for the SDGOODS 360 × 360 round display. See LICENSE for the source project's license and web/platform/README.md for the simulator's separate platform assets.
+The Doom engine and GBADoom-derived code are GPL-2.0-or-later.
+DOOM1_PROCESSED.WAD and DOOM_SFX.bin in the original release image contain
+game data copyrighted by id Software. See the upstream release and notices
+for the terms applicable to those assets.
